@@ -10,24 +10,33 @@ let pending = [];
 
 const MAX_BITRATE = 30_000_000;
 
-// Linux/Wayland: getUserMedia com chromeMediaSourceId derruba o app depois que a pessoa escolhe a
-// tela na janela do sistema (portal). O caminho suportado é o getDisplayMedia: o main responde pelo
-// setDisplayMediaRequestHandler e o portal do sistema cuida da escolha.
-const VIA_PORTAL = navigator.userAgent.includes('Linux');
+const IS_LINUX = navigator.userAgent.includes('Linux');
 
-async function captureViaPortal() {
-  const s = await navigator.mediaDevices.getDisplayMedia({
-    video: { frameRate: { ideal: 60, max: 60 } },
-    audio: false, // o Linux não tem captura do som do sistema por aqui
-  });
-  const t = s.getVideoTracks()[0];
-  const st = t?.getSettings() || {};
-  api.send('hmd:host-captured', { width: st.width || 0, height: st.height || 0, label: t?.label || '' });
-  return s;
+// Captura pelo getDisplayMedia: o main escolhe a tela no setDisplayMediaRequestHandler (no Wayland,
+// abre o portal do sistema). O caminho antigo (getUserMedia + chromeMediaSourceId) derrubava o app no
+// Wayland e, no Electron 44, ficava preso em ~38 fps no Windows; ele fica só de reserva no Windows.
+async function capture(sourceId, width, height, audio) {
+  try {
+    const s = await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        frameRate: { ideal: 60, max: 60 },
+        ...(width && height ? { width: { max: width }, height: { max: height } } : {}),
+      },
+      audio: !!audio && !IS_LINUX, // som do sistema só existe no Windows
+    });
+    const t = s.getVideoTracks()[0];
+    const st = t?.getSettings() || {};
+    api.send('hmd:host-captured', { width: st.width || 0, height: st.height || 0, label: t?.label || '' });
+    api.send('hmd:log', `captura: ${st.width}x${st.height} a ${Math.round(st.frameRate || 0)} fps, som: ${s.getAudioTracks().length ? 'sim' : 'não'}`);
+    return s;
+  } catch (e) {
+    if (IS_LINUX) throw e;
+    api.send('hmd:log', 'getDisplayMedia falhou, usando o caminho antigo:', e.message);
+    return captureLegacy(sourceId, width, height, audio);
+  }
 }
 
-async function capture(sourceId, width, height, audio) {
-  if (VIA_PORTAL) return captureViaPortal();
+async function captureLegacy(sourceId, width, height, audio) {
   const video = {
     mandatory: {
       chromeMediaSource: 'desktop',
@@ -111,6 +120,31 @@ async function start({ sourceId, width, height, audio }) {
   await tuneSender(videoSender);
   for (const m of pending) await onSignal(m);
   pending = [];
+  startSenderStats();
+}
+
+// diagnóstico: registra no log como está o envio (fps capturado x enviado, motivo de limitação):
+// as 3 primeiras medições de cada sessão e, depois, só quando houver limitação
+let statsTimer = null;
+let statsCount = 0;
+function startSenderStats() {
+  clearInterval(statsTimer);
+  statsCount = 0;
+  statsTimer = setInterval(async () => {
+    if (!pc) return clearInterval(statsTimer);
+    const st = await pc.getStats();
+    let out = null, src = null;
+    st.forEach((r) => {
+      if (r.type === 'outbound-rtp' && r.kind === 'video') out = r;
+      if (r.type === 'media-source' && r.kind === 'video') src = r;
+    });
+    if (!out) return;
+    statsCount++;
+    if (statsCount > 3 && (!out.qualityLimitationReason || out.qualityLimitationReason === 'none')) return;
+    api.send('hmd:log', `envio: captura ${Math.round(src?.framesPerSecond || 0)} fps → enviado ${Math.round(out.framesPerSecond || 0)} fps ` +
+      `${out.frameWidth}x${out.frameHeight} · limite: ${out.qualityLimitationReason || '-'} · codificador: ${out.encoderImplementation || '?'}` +
+      `${out.powerEfficientEncoder ? ' (hardware)' : ''}`);
+  }, 5000);
 }
 
 async function switchScreen({ sourceId, width, height }) {

@@ -62,10 +62,9 @@ const gotLock = env('HMD_PROFILE') ? true : app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
-if (process.platform === 'linux') {
-  // captura de tela no Wayland passa pelo PipeWire (o sistema pede para escolher a tela)
-  app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer');
-}
+// Linux: a partir do Electron 38 o app já abre como Wayland nativo numa sessão Wayland (no Electron 33
+// rodava via XWayland, e capturar a tela pelo PipeWire nessa mistura derrubava o processo principal).
+// A captura no Wayland passa pelo portal do sistema (PipeWire), ligado por padrão.
 
 // ---------------------------------------------------------------- configurações
 let settings = {};
@@ -256,16 +255,15 @@ function startCapture(scr, first) {
   });
   const msg = {
     type: first ? 'start' : 'switch',
-    sourceId: scr.sourceId, width: scr.width, height: scr.height, audio: !IS_LINUX,
+    sourceId: scr.sourceId, width: scr.width, height: scr.height,
+    audio: !IS_LINUX && first, // som do sistema só no Windows (e só na primeira captura)
   };
-  if (IS_LINUX) {
-    // com "gesto do usuário", porque o getDisplayMedia pode exigir isso e a janela é invisível
-    hostWin.webContents
-      .executeJavaScript(`window.__hmdHost(${JSON.stringify(msg)})`, true)
-      .catch((e) => console.error('[servidor] captura:', e.message));
-  } else {
-    hostWin.webContents.send('hmd:host', msg);
-  }
+  // A captura usa getDisplayMedia nos dois sistemas: o setDisplayMediaRequestHandler abaixo entrega
+  // a tela pedida. É disparada com "gesto do usuário" porque a janela é invisível.
+  pendingCapture = { sourceId: scr.sourceId, audio: msg.audio };
+  hostWin.webContents
+    .executeJavaScript(`window.__hmdHost(${JSON.stringify(msg)})`, true)
+    .catch((e) => console.error('[servidor] captura:', e.message));
 }
 
 // Linux: o portal decide qual tela é capturada. Descobrimos qual é pelo tamanho do vídeo,
@@ -273,6 +271,7 @@ function startCapture(scr, first) {
 function onCaptured({ width, height, label }) {
   if (!session || !width || !height) return;
   console.log(`[servidor] capturando ${width}x${height} ${label || ''}`);
+  if (!IS_LINUX) return; // no Windows a tela é exatamente a pedida
   const match = session.screens.find((s) => s.width === width && s.height === height)
     || session.screens.find((s) => Math.abs(s.width / s.height - width / height) < 0.01)
     || session.current;
@@ -282,15 +281,23 @@ function onCaptured({ width, height, label }) {
   }
 }
 
-// Linux: responde ao getDisplayMedia da janela invisível abrindo o portal do sistema.
+// Responde ao getDisplayMedia da janela invisível.
+//   • Windows: entrega a tela pedida (pendingCapture) e, na primeira captura, o som do sistema;
+//   • Linux: no Wayland a chamada abre o portal do sistema e a pessoa escolhe a tela.
+// O caminho antigo (getUserMedia + chromeMediaSourceId) ficava preso em ~38 fps no Electron 44 e
+// derrubava o app no Wayland.
+let pendingCapture = null;
 function setupDisplayMediaHandler() {
-  if (!IS_LINUX) return;
   const { session: electronSession } = require('electron');
   electronSession.defaultSession.setDisplayMediaRequestHandler(async (_req, callback) => {
     try {
       const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
-      if (sources.length) callback({ video: sources[0] });
-      else callback({});
+      const wanted = IS_LINUX ? sources[0]
+        : sources.find((s) => s.id === pendingCapture?.sourceId) || sources[0];
+      if (!wanted) return callback({});
+      const streams = { video: wanted };
+      if (!IS_LINUX && pendingCapture?.audio) streams.audio = 'loopback';
+      callback(streams);
     } catch (e) {
       console.error('[servidor] portal:', e.message);
       callback({});
@@ -386,14 +393,23 @@ function fixLinuxInput() {
 const sendCtlToViewer =(m) => hostWin?.webContents.send('hmd:host', { type: 'ctl-send', data: JSON.stringify(m) });
 
 // ---------------------------------------------------------------- área de transferência (texto, nos dois sentidos)
+// No Electron 44 o clipboard do processo principal ficou assíncrono (readText/writeText devolvem
+// Promise); com await funciona também nas versões antigas, que devolviam o valor direto.
 let lastClip = '';
-function setClipboardFromRemote(text) {
+let polling = false;
+async function setClipboardFromRemote(text) {
   if (text.length > 1_000_000) return;
   lastClip = text;
-  clipboard.writeText(text);
+  try { await clipboard.writeText(text); } catch (e) { console.error('[área de transferência]', e.message); }
 }
-function pollClipboard() {
-  const t = clipboard.readText();
+async function readClipboard() {
+  try { return String((await clipboard.readText()) ?? ''); } catch { return lastClip; }
+}
+async function pollClipboard() {
+  if (polling) return; // a leitura anterior ainda não voltou
+  polling = true;
+  let t;
+  try { t = await readClipboard(); } finally { polling = false; }
   if (t === lastClip) return;
   lastClip = t;
   if (!t || t.length > 1_000_000) return;
@@ -719,7 +735,7 @@ app.whenReady().then(() => {
   });
   // o injetor demora um pouco a subir; atualiza o aviso de "controle indisponível" na tela
   setTimeout(pushState, 4000);
-  lastClip = clipboard.readText();
+  readClipboard().then((t) => { lastClip = t; });
   console.log(`[Hyperdesk] ${myName()} pronto na porta ${PORT}`);
 
   if (env('HMD_SNAPSHOT')) {

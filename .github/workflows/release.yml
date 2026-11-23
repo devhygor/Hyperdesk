@@ -15,11 +15,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Uma versão do Electron para cada sistema:
+        #   • Windows: 33 (da package.json). Do 38 em diante a captura de tela no Windows cai de ~58
+        #     para ~37 fps (medido com o mesmo código).
+        #   • Linux: 44. Roda como app Wayland nativo; no 33 (via XWayland) a captura pelo PipeWire
+        #     derrubava o app logo depois de escolher a tela no Ubuntu 26.04.
         include:
           - os: windows-latest
             target: --win
+            electron: ''
           - os: ubuntu-latest
             target: --linux
+            electron: 44.11.5
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -28,8 +35,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Trocar a versão do Electron
+        if: matrix.electron != ''
+        run: npm install --no-save electron@${{ matrix.electron }}
       - name: Empacotar
-        run: npx electron-builder ${{ matrix.target }} --publish never
+        run: npx electron-builder ${{ matrix.target }} --publish never ${{ matrix.electron != '' && format('-c.electronVersion={0}', matrix.electron) || '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-artifact@v4
