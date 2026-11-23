@@ -1,0 +1,10 @@
+html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
+  font: 13px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; color: #e8ebf3; }
+.pill { -webkit-app-region: drag; height: 38px; margin: 4px; display: flex; align-items: center; gap: 10px; padding: 0 6px 0 14px;
+  background: rgba(18, 21, 30, .94); border: 1px solid rgba(248, 113, 113, .45); border-radius: 999px; }
+.rec { width: 9px; height: 9px; border-radius: 50%; background: #f87171; box-shadow: 0 0 10px #f87171; animation: pulse 1.4s infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+#txt { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+button { -webkit-app-region: no-drag; font: inherit; color: #fecaca; background: rgba(248, 113, 113, .18);
+  border: 1px solid rgba(248, 113, 113, .4); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
+button:hover { background: rgba(248, 113, 113, .3); }

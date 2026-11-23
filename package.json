@@ -1,0 +1,86 @@
+{
+  "name": "hyperdesk",
+  "productName": "Hyperdesk",
+  "version": "0.1.0",
+  "description": "Acesso remoto moderno para os PCs da casa (tela + controle via WebRTC na rede local)",
+  "main": "src/main.js",
+  "private": true,
+  "author": "Hygor",
+  "license": "MIT",
+  "homepage": "https://github.com/devhygor/Hyperdesk",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/devhygor/Hyperdesk.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "icon": "node scripts/make-icon.js",
+    "dist": "electron-builder --publish never",
+    "dist:win": "electron-builder --win --publish never",
+    "dist:linux": "electron-builder --linux --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "br.com.hygor.hyperdesk",
+    "productName": "Hyperdesk",
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "src/input/**"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "devhygor",
+        "repo": "Hyperdesk",
+        "releaseType": "release"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "Hyperdesk-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Hyperdesk-Portatil-${version}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "assets/icon.png",
+      "category": "Network",
+      "maintainer": "Hygor <devhygor@users.noreply.github.com>",
+      "synopsis": "Acesso remoto entre os PCs da casa",
+      "artifactName": "Hyperdesk-${version}-${arch}.${ext}"
+    },
+    "deb": {
+      "depends": [
+        "python3",
+        "libxtst6",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libasound2 | libasound2t64"
+      ]
+    }
+  }
+}

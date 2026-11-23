@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'">
+  <title>Hyperdesk</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="update" class="update hidden">
+    <span class="update-dot"></span>
+    <span id="updateText"></span>
+    <button id="updateBtn" class="primary"></button>
+  </div>
+
+  <header class="top">
+    <div class="brand">
+      <div class="logo"><span></span><span></span></div>
+      <div>
+        <h1>Hyperdesk <span class="version" id="version"></span></h1>
+        <p class="muted">Acesse e controle os PCs da sua casa</p>
+      </div>
+    </div>
+  </header>
+
+  <main class="grid">
+    <!-- este PC -->
+    <section class="card">
+      <div class="card-head">
+        <h2>Este PC</h2>
+        <label class="switch" title="Deixar outros PCs controlarem este">
+          <input type="checkbox" id="allow"><span></span>
+        </label>
+      </div>
+
+      <div class="me">
+        <input id="name" class="name" spellcheck="false" title="Clique para renomear">
+        <div class="ips muted" id="ips"></div>
+      </div>
+
+      <div id="inputWarn" class="warn hidden"></div>
+
+      <div id="sessionBox" class="session hidden">
+        <span class="rec"></span>
+        <div><b id="sessionPeer"></b><div class="muted">está controlando este PC</div></div>
+        <button class="danger" id="kick">Desconectar</button>
+      </div>
+
+      <div id="codeBox" class="code-box">
+        <div class="label muted">Código de acesso</div>
+        <div class="code" id="code">— — —</div>
+        <div class="row">
+          <button id="copyCode">Copiar</button>
+          <button id="newCode">Gerar outro</button>
+        </div>
+        <p class="hint muted">Digite esse código no outro PC para controlar este. Ele muda a cada conexão.</p>
+      </div>
+      <div id="offBox" class="off-box hidden muted">Conexões desligadas. Ninguém consegue acessar este PC.</div>
+
+      <div class="pass">
+        <div>
+          <b>Senha fixa</b>
+          <div class="muted" id="passStatus">Não definida</div>
+        </div>
+        <div class="row">
+          <button id="passSet">Definir</button>
+          <button id="passClear" class="ghost hidden">Remover</button>
+        </div>
+      </div>
+      <form id="passForm" class="pass-form hidden">
+        <input type="password" id="passInput" placeholder="Nova senha (mín. 8 caracteres)" autocomplete="new-password">
+        <button type="submit" class="primary">Salvar</button>
+        <button type="button" class="ghost" id="passCancel">Cancelar</button>
+      </form>
+      <p class="hint muted">Com senha fixa você acessa este PC sem precisar olhar o código (e pode marcar "lembrar").</p>
+    </section>
+
+    <!-- conectar -->
+    <section class="card">
+      <div class="card-head"><h2>Controlar outro PC</h2></div>
+      <form id="connectForm" class="connect">
+        <input id="hostInput" placeholder="IP ou nome (ex.: 192.168.0.20)" spellcheck="false">
+        <button type="submit" class="primary">Conectar</button>
+      </form>
+
+      <h3>Na sua rede</h3>
+      <div id="peers" class="list"></div>
+      <div id="peersEmpty" class="empty muted">
+        <div class="radar"></div>
+        Procurando PCs com o Hyperdesk aberto…
+      </div>
+
+      <h3 id="recentTitle" class="hidden">Recentes</h3>
+      <div id="recent" class="list"></div>
+    </section>
+  </main>
+
+  <p class="error-toast hidden" id="toast"></p>
+  <script src="app.js"></script>
+</body>
+</html>

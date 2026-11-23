@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src ws: wss:; media-src 'self' blob: mediastream:">
+  <title>Hyperdesk</title>
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+  <div id="stage">
+    <video id="v" autoplay playsinline></video>
+  </div>
+
+  <div id="hotzone"></div>
+  <header id="bar">
+    <span class="dot" id="dot"></span>
+    <strong id="peer">…</strong>
+    <span class="sep"></span>
+    <select id="screens" title="Qual tela do outro PC mostrar"></select>
+    <button id="quality" title="Fluidez: prioriza movimento · Nitidez: prioriza texto">Fluidez</button>
+    <button id="audio" title="Som do outro PC">Som: ligado</button>
+    <div class="menu">
+      <button id="keysBtn" title="Atalhos que o Windows deste PC não deixa passar">Teclas ▾</button>
+      <div class="menu-list" id="keys">
+        <button data-combo="MetaLeft">Tecla Windows</button>
+        <button data-combo="AltLeft+Tab">Alt + Tab</button>
+        <button data-combo="ControlLeft+ShiftLeft+Escape">Ctrl + Shift + Esc</button>
+        <button data-combo="MetaLeft+KeyD">Win + D (área de trabalho)</button>
+        <button data-combo="MetaLeft+KeyL">Win + L (bloquear)</button>
+        <button data-combo="PrintScreen">Print Screen</button>
+      </div>
+    </div>
+    <button id="cursor" title="Mostrar também a seta deste PC">Seta local: não</button>
+    <button id="fs" title="Tela cheia (Ctrl+Alt+Enter)">Tela cheia</button>
+    <span class="sep"></span>
+    <span id="stats" class="stats">—</span>
+    <button id="close" class="danger">Desconectar</button>
+  </header>
+
+  <div id="overlay">
+    <div class="card" id="statusCard">
+      <div class="spinner" id="spinner"></div>
+      <p id="statusText">Conectando…</p>
+      <button id="statusClose" class="ghost hidden">Fechar</button>
+    </div>
+
+    <form class="card hidden" id="authForm" autocomplete="off">
+      <h2 id="authTitle">Acessar</h2>
+      <p class="muted">Digite o <b>código de 6 dígitos</b> que aparece no outro PC, ou a senha fixa dele.</p>
+      <input id="secret" type="password" placeholder="Código ou senha" autofocus>
+      <label class="check"><input type="checkbox" id="remember"> Lembrar a senha fixa neste PC</label>
+      <p class="error hidden" id="authError">Código ou senha incorretos.</p>
+      <div class="row">
+        <button type="button" class="ghost" id="authCancel">Cancelar</button>
+        <button type="submit" class="primary" id="authGo">Entrar</button>
+      </div>
+    </form>
+  </div>
+
+  <script src="viewer.js"></script>
+</body>
+</html>
