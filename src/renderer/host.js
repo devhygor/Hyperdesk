@@ -7,6 +7,7 @@ let stream = null;
 let videoSender = null;
 let ctl = null;
 let pending = [];
+let sid = 0; // número da sessão no main: tudo que sai daqui leva ele
 
 const MAX_BITRATE = 30_000_000;
 
@@ -89,23 +90,28 @@ async function tuneSender(sender) {
   try { await sender.setParameters(p); } catch (e) { console.warn('setParameters', e); }
 }
 
-async function start({ sourceId, width, height, audio }) {
+async function start({ sourceId, width, height, audio, sid: newSid }) {
   stop();
-  pc = new RTCPeerConnection({ iceServers: [] });
-  pc.onicecandidate = (e) => { if (e.candidate) api.send('hmd:host-signal', { type: 'ice', candidate: e.candidate.toJSON() }); };
-  pc.onconnectionstatechange = () => api.send('hmd:host-state', pc.connectionState);
+  sid = newSid;
+  const my = sid;
+  const me = pc = new RTCPeerConnection({ iceServers: [] });
+  pc.onicecandidate = (e) => { if (e.candidate) api.send('hmd:host-signal', { type: 'ice', candidate: e.candidate.toJSON() }, my); };
+  pc.onconnectionstatechange = () => api.send('hmd:host-state', me.connectionState, my);
 
   ctl = pc.createDataChannel('ctl', { ordered: true });
   ctl.onmessage = (e) => onCtl(e.data);
   const input = pc.createDataChannel('input', { ordered: true });
   input.onmessage = (e) => api.send('hmd:host-input', e.data);
 
+  let s;
   try {
-    stream = await capture(sourceId, width, height, audio);
+    s = await capture(sourceId, width, height, audio);
   } catch (e) {
-    api.send('hmd:host-error', e.message || String(e));
+    if (pc === me) api.send('hmd:host-error', e.message || String(e));
     return;
   }
+  if (pc !== me) { s.getTracks().forEach((t) => t.stop()); return; } // a sessão mudou durante a captura
+  stream = s;
   const vt = stream.getVideoTracks()[0];
   vt.contentHint = 'motion';
   const vtr = pc.addTransceiver(vt, { direction: 'sendonly', streams: [stream] });
@@ -116,7 +122,8 @@ async function start({ sourceId, width, height, audio }) {
 
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
-  api.send('hmd:host-signal', { type: 'offer', sdp: pc.localDescription.sdp });
+  if (pc !== me) return;
+  api.send('hmd:host-signal', { type: 'offer', sdp: pc.localDescription.sdp }, my);
   await tuneSender(videoSender);
   for (const m of pending) await onSignal(m);
   pending = [];

@@ -142,17 +142,50 @@ function registerFail(ip) {
 // ---------------------------------------------------------------- servidor (este PC sendo controlado)
 const injector = new Injector();
 let wss = null;
-let session = null; // { ws, send, peer, ip, screens, current }
+let session = null; // { sid, ws, send, peer, ip, screens, current }
+let sessionSeq = 0; // cada sessão tem um número: sinais atrasados de uma sessão antiga são descartados
+
+// Batimento: se o PC controlador travar, desligar sem avisar ou perder a rede, a conexão TCP fica
+// "meio aberta" e o evento 'close' nunca chega. Sem isto, este PC ficava "ocupado" até o WebRTC
+// desistir (no log real, mais de 1 hora) e ninguém conseguia conectar de novo.
+const PING_MS = 5_000;
+const DEAD_MS = 20_000;
+let lastTick = Date.now();
+function startHeartbeat() {
+  setInterval(() => {
+    const now = Date.now();
+    // se ESTE PC travou (o timer não rodou), não derruba quem estava conectado: só recomeça a contar
+    const frozen = now - lastTick > PING_MS * 3;
+    lastTick = now;
+    for (const ws of wss?.clients || []) {
+      if (frozen) ws.lastPong = now;
+      if (now - (ws.lastPong || now) > DEAD_MS) {
+        console.log('[servidor] o outro PC parou de responder: encerrando a conexão');
+        ws.terminate(); // dispara o 'close', que encerra a sessão
+        continue;
+      }
+      try { ws.ping(); } catch {}
+    }
+  }, PING_MS);
+}
+
+// Uma sessão está "morta" se o outro lado não responde há um tempo: aí uma conexão nova pode assumir.
+const sessionStale = () => session && Date.now() - (session.ws.lastPong || 0) > PING_MS * 2;
 
 function startServer() {
   wss = new WebSocketServer({ port: PORT, maxPayload: 1 << 20 });
   wss.on('error', (e) => console.error('[servidor]', e.message));
+  startHeartbeat();
   wss.on('connection', (ws, req) => {
     const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
     const send = (m) => ws.readyState === 1 && ws.send(JSON.stringify(m));
+    ws.lastPong = Date.now();
+    ws.on('pong', () => { ws.lastPong = Date.now(); });
 
     if (!settings.allowIncoming) { send({ type: 'error', reason: 'disabled' }); return ws.close(); }
-    if (session) { send({ type: 'error', reason: 'busy' }); return ws.close(); }
+    if (sessionStale()) { console.log('[servidor] sessão anterior sem resposta: liberando'); endSession(); }
+    // o mesmo PC reconectando (ex.: o app dele travou e foi reaberto) passa: a troca acontece depois da senha
+    if (session && session.ip !== ip) { send({ type: 'error', reason: 'busy' }); return ws.close(); }
     const lock = fails.get(ip);
     if (lock && lock.until > Date.now()) { send({ type: 'error', reason: 'locked' }); return ws.close(); }
 
@@ -174,7 +207,8 @@ function startServer() {
 
       if (!authed) {
         if (m.type !== 'auth') return;
-        if (session) { send({ type: 'error', reason: 'busy' }); return ws.close(); }
+        if (sessionStale()) endSession();
+        if (session && session.ip !== ip) { send({ type: 'error', reason: 'busy' }); return ws.close(); }
         const via = checkProof(m.proof, nonce);
         if (!via) {
           registerFail(ip);
@@ -186,7 +220,11 @@ function startServer() {
         authed = true;
         clearTimeout(timeout);
         fails.delete(ip);
-        session = { ws, send, peer: String(m.name || 'Outro PC').slice(0, 60), ip, screens: [], current: null };
+        if (session) { // o mesmo PC voltou com a senha certa: a sessão antiga dele fica para trás
+          console.log('[servidor] o mesmo PC reconectou: trocando a sessão antiga pela nova');
+          endSession();
+        }
+        session = { sid: ++sessionSeq, ws, send, peer: String(m.name || 'Outro PC').slice(0, 60), ip, screens: [], current: null };
         try {
           session.screens = await listScreens();
         } catch (e) {
@@ -255,6 +293,7 @@ function startCapture(scr, first) {
   });
   const msg = {
     type: first ? 'start' : 'switch',
+    sid: session.sid,
     sourceId: scr.sourceId, width: scr.width, height: scr.height,
     audio: !IS_LINUX && first, // som do sistema só no Windows (e só na primeira captura)
   };
@@ -695,12 +734,23 @@ function registerIpc() {
   ipcMain.on('hmd:log', (_e, ...a) => console.log('[viewer]', ...a));
 
   // janela invisível do servidor
-  ipcMain.on('hmd:host-signal', (_e, data) => session?.send(data));
+  ipcMain.on('hmd:host-signal', (_e, data, sid) => { if (session && sid === session.sid) session.send(data); });
   ipcMain.on('hmd:host-input', (_e, str) => handleInput(str));
   ipcMain.on('hmd:host-ctl', (_e, str) => handleCtl(str));
-  ipcMain.on('hmd:host-state', (_e, st) => {
+  // 'disconnected' pode voltar sozinho (oscilação do Wi-Fi), mas se durar 15 s a sessão acaba:
+  // esperar o 'failed' do WebRTC pode demorar muito e deixa o PC ocupado
+  let rtcDownTimer = null;
+  ipcMain.on('hmd:host-state', (_e, st, sid) => {
+    if (!session || sid !== session.sid) return; // estado de uma sessão que já acabou
     console.log('[servidor] webrtc:', st);
-    if (st === 'failed') endSession();
+    clearTimeout(rtcDownTimer);
+    if (st === 'failed' || st === 'closed') endSession();
+    else if (st === 'disconnected') {
+      const s = session;
+      rtcDownTimer = setTimeout(() => {
+        if (session && session === s) { console.log('[servidor] vídeo caído há 15 s: encerrando a sessão'); endSession(); }
+      }, 15_000);
+    }
   });
   ipcMain.on('hmd:host-captured', (_e, info) => onCaptured(info || {}));
   ipcMain.on('hmd:host-error', (_e, msg) => {
