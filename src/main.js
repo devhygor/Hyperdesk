@@ -252,6 +252,12 @@ function startServer() {
 }
 
 const IS_LINUX = process.platform === 'linux';
+// id que o Chromium entende como "a área de trabalho inteira" (todas as telas numa imagem)
+const ALL_SCREENS = 'screen:-1:0';
+// nomes com que os drivers de monitor virtual costumam aparecer
+const VIRTUAL_RE = /virtual|vdd|idd|mtt|parsec|spacedesk|dummy/i;
+// quantas telas extras dá para mandar ao mesmo tempo (fora a principal)
+const MAX_EXTRAS = 3;
 
 async function listScreens() {
   const displays = screen.getAllDisplays();
@@ -261,26 +267,41 @@ async function listScreens() {
   const sources = IS_LINUX
     ? displays.map((d) => ({ id: `display:${d.id}`, display_id: String(d.id) }))
     : await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
-  return sources.map((s, i) => {
+  const list = sources.map((s, i) => {
     const d = displays.find((x) => String(x.id) === s.display_id) || displays[i] || primary;
     // pixels físicos (o SendInput trabalha neles); dipToScreenRect só existe no Windows
     const rect = process.platform === 'win32'
       ? screen.dipToScreenRect(null, d.bounds)
       : { x: Math.round(d.bounds.x * d.scaleFactor), y: Math.round(d.bounds.y * d.scaleFactor),
           width: Math.round(d.bounds.width * d.scaleFactor), height: Math.round(d.bounds.height * d.scaleFactor) };
+    const virtual = VIRTUAL_RE.test(d.label || '');
     return {
       sourceId: s.id,
-      label: `Tela ${i + 1}${d.id === primary.id ? ' (principal)' : ''}`,
+      label: `Tela ${i + 1}${d.id === primary.id ? ' (principal)' : ''}${virtual ? ' (monitor virtual)' : ''}`,
       width: rect.width,
       height: rect.height,
       primary: d.id === primary.id,
+      virtual,
       rect,
     };
   });
+  // Windows: uma opção com todas as telas juntas numa imagem só (para quem só tem um monitor)
+  if (process.platform === 'win32' && list.length > 1) {
+    const x0 = Math.min(...list.map((s) => s.rect.x)), y0 = Math.min(...list.map((s) => s.rect.y));
+    const x1 = Math.max(...list.map((s) => s.rect.x + s.rect.width)), y1 = Math.max(...list.map((s) => s.rect.y + s.rect.height));
+    const rect = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+    // a imagem sai reduzida para no máximo 1920 de largura: com 3840 o codificador cai para ~32 fps,
+    // e quem usa esta opção tem um monitor só (não mostraria mais que isso). O mouse usa o rect inteiro.
+    const k = Math.min(1, 1920 / rect.width);
+    const width = Math.round(rect.width * k / 2) * 2, height = Math.round(rect.height * k / 2) * 2;
+    list.push({ sourceId: ALL_SCREENS, label: 'Todas as telas', width, height, primary: false, all: true, rect });
+  }
+  return list;
 }
 
 const publicScreens = () =>
-  (session?.screens || []).map(({ sourceId, label, width, height, primary }) => ({ sourceId, label, width, height, primary }));
+  (session?.screens || []).map(({ sourceId, label, width, height, primary, all, virtual }) =>
+    ({ sourceId, label, width, height, primary, all: !!all, virtual: !!virtual }));
 
 function startCapture(scr, first) {
   session.current = scr;
@@ -296,6 +317,8 @@ function startCapture(scr, first) {
     sid: session.sid,
     sourceId: scr.sourceId, width: scr.width, height: scr.height,
     audio: !IS_LINUX && first, // som do sistema só no Windows (e só na primeira captura)
+    // vagas de vídeo extras para o "Espalhar telas" (ficam vazias até o outro lado pedir)
+    extras: Math.min(session.screens.filter((s) => !s.all).length - 1, MAX_EXTRAS),
   };
   // A captura usa getDisplayMedia nos dois sistemas: o setDisplayMediaRequestHandler abaixo entrega
   // a tela pedida. É disparada com "gesto do usuário" porque a janela é invisível.
@@ -307,13 +330,17 @@ function startCapture(scr, first) {
 
 // Linux: o portal decide qual tela é capturada. Descobrimos qual é pelo tamanho do vídeo,
 // para o mouse cair no lugar certo.
-function onCaptured({ width, height, label }) {
+function onCaptured({ width, height, label, slot }) {
   if (!session || !width || !height) return;
-  console.log(`[servidor] capturando ${width}x${height} ${label || ''}`);
+  console.log(`[servidor] capturando ${width}x${height} ${label || ''}${slot ? ` (vaga extra ${slot})` : ''}`);
   if (!IS_LINUX) return; // no Windows a tela é exatamente a pedida
   const match = session.screens.find((s) => s.width === width && s.height === height)
     || session.screens.find((s) => Math.abs(s.width / s.height - width / height) < 0.01)
-    || session.current;
+    || (slot ? null : session.current);
+  if (slot) {
+    if (match) sendCtlToViewer({ t: 'extra-screen', slot, sourceId: match.sourceId });
+    return;
+  }
   if (match && match !== session.current) {
     session.current = match;
     sendCtlToViewer({ t: 'screens', screens: publicScreens(), current: match.sourceId });
@@ -332,6 +359,7 @@ function setupDisplayMediaHandler() {
     try {
       const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
       const wanted = IS_LINUX ? sources[0]
+        : pendingCapture?.sourceId === ALL_SCREENS ? { id: ALL_SCREENS, name: 'Todas as telas' }
         : sources.find((s) => s.id === pendingCapture?.sourceId) || sources[0];
       if (!wanted) return callback({});
       const streams = { video: wanted };
@@ -360,7 +388,8 @@ function handleInput(str) {
   if (!session?.current) return;
   let m;
   try { m = JSON.parse(str); } catch { return; }
-  const r = session.current.rect;
+  const scr = (m.s && session.screens.find((x) => x.sourceId === m.s)) || session.current;
+  const r = scr.rect;
   const toPx = () => {
     const x = Math.min(Math.max(+m.x || 0, 0), 1);
     const y = Math.min(Math.max(+m.y || 0, 0), 1);
@@ -394,6 +423,17 @@ async function handleCtl(str) {
       startCapture(scr, false);
       sendCtlToViewer({ t: 'screens', screens: publicScreens(), current: scr.sourceId });
     }
+  } else if (m.t === 'extra') {
+    const slot = m.slot | 0;
+    if (slot < 1 || slot > MAX_EXTRAS) return;
+    const scr = m.sourceId ? session.screens.find((x) => x.sourceId === m.sourceId && !x.all) : null;
+    if (m.sourceId && !scr) return;
+    if (scr) pendingCapture = { sourceId: scr.sourceId, audio: false };
+    hostWin.webContents
+      .executeJavaScript(`window.__hmdHost(${JSON.stringify({
+        type: 'extra', slot, sourceId: scr?.sourceId || null, width: scr?.width, height: scr?.height,
+      })})`, true)
+      .catch((e) => console.error('[servidor] tela extra:', e.message));
   } else if (m.t === 'clip' && typeof m.text === 'string') {
     setClipboardFromRemote(m.text);
   }
@@ -574,6 +614,26 @@ function openViewer(params) {
     webPreferences: webPrefs({ backgroundThrottling: false }),
   });
   win.setMenu(null);
+  // "Espalhar telas": a janela do viewer abre extra.html com o nome "extra-<vaga>-<id do monitor>";
+  // ela nasce sem moldura em cima do monitor pedido e entra em tela cheia lá
+  win.webContents.setWindowOpenHandler(({ url, frameName }) => {
+    const mm = /^extra-(\d+)-(\d+)$/.exec(frameName || '');
+    if (!mm || !url.endsWith('/extra.html')) return { action: 'deny' };
+    const d = screen.getAllDisplays().find((x) => String(x.id) === mm[2]) || screen.getPrimaryDisplay();
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        x: d.bounds.x, y: d.bounds.y, width: d.bounds.width, height: d.bounds.height,
+        frame: false, backgroundColor: '#000000', autoHideMenuBar: true, icon: iconPath,
+        title: 'Hyperdesk', webPreferences: webPrefs({ backgroundThrottling: false }),
+      },
+    };
+  });
+  win.webContents.on('did-create-window', (child) => {
+    child.setMenu(null);
+    child.once('ready-to-show', () => child.setFullScreen(true));
+    setTimeout(() => { if (!child.isDestroyed()) child.setFullScreen(true); }, 400);
+  });
   viewerWins.set(win, { ...params, myName: myName() });
   win.on('closed', () => viewerWins.delete(win));
   win.loadFile(path.join(__dirname, 'renderer', 'viewer.html'));
@@ -725,6 +785,11 @@ function registerIpc() {
     ].slice(0, 8);
     saveSettings(); pushState();
   });
+  ipcMain.handle('hmd:viewer-displays', (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const mine = win ? screen.getDisplayMatching(win.getBounds()).id : null;
+    return { mine, displays: screen.getAllDisplays().map((d) => ({ id: d.id, bounds: d.bounds })) };
+  });
   ipcMain.handle('hmd:viewer-fullscreen', (e, v) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     win.setFullScreen(typeof v === 'boolean' ? v : !win.isFullScreen());
@@ -795,8 +860,22 @@ app.whenReady().then(() => {
       fs.mkdirSync(dir, { recursive: true });
       if (mainWin && env('HMD_SNAPSHOT_JS')) { await mainWin.webContents.executeJavaScript(env('HMD_SNAPSHOT_JS'), true); await new Promise((r) => setTimeout(r, 2500)); }
       if (mainWin) fs.writeFileSync(path.join(dir, 'main.png'), (await mainWin.webContents.capturePage()).toPNG());
+      // HMD_VIEWER_JS: roda JS nas janelas do viewer antes do print (ex.: "toggleSpread()")
+      if (env('HMD_VIEWER_JS')) {
+        for (const w of viewerWins.keys()) {
+          const r = await w.webContents.executeJavaScript(env('HMD_VIEWER_JS'), true).catch((e) => `erro: ${e.message}`);
+          console.log('[snapshot] js do viewer:', JSON.stringify(r));
+        }
+        await new Promise((r) => setTimeout(r, 4000));
+      }
       let i = 0;
       for (const w of viewerWins.keys()) fs.writeFileSync(path.join(dir, `viewer${i++}.png`), (await w.webContents.capturePage()).toPNG());
+      let k = 0;
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (viewerWins.has(w) || w === mainWin || w === hostWin || w === bannerWin || !w.isVisible()) continue;
+        console.log('[snapshot] janela extra', k, JSON.stringify(w.getBounds()), 'tela cheia:', w.isFullScreen());
+        fs.writeFileSync(path.join(dir, `extra${k++}.png`), (await w.webContents.capturePage()).toPNG());
+      }
       console.log('[snapshot] salvo em', dir);
     }, Number(env('HMD_SNAPSHOT_DELAY')) || 9000);
   }

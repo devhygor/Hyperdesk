@@ -8,6 +8,9 @@ let videoSender = null;
 let ctl = null;
 let pending = [];
 let sid = 0; // número da sessão no main: tudo que sai daqui leva ele
+// vagas extras do "Espalhar telas": cada uma é uma faixa de vídeo a mais, negociada já no começo
+// e vazia até o outro lado pedir uma tela (aí entra com replaceTrack, sem renegociar)
+let extras = []; // [{ sender, track }]
 
 const MAX_BITRATE = 30_000_000;
 
@@ -16,7 +19,7 @@ const IS_LINUX = navigator.userAgent.includes('Linux');
 // Captura pelo getDisplayMedia: o main escolhe a tela no setDisplayMediaRequestHandler (no Wayland,
 // abre o portal do sistema). O caminho antigo (getUserMedia + chromeMediaSourceId) derrubava o app no
 // Wayland e, no Electron 44, ficava preso em ~38 fps no Windows; ele fica só de reserva no Windows.
-async function capture(sourceId, width, height, audio) {
+async function capture(sourceId, width, height, audio, slot = 0) {
   try {
     const s = await navigator.mediaDevices.getDisplayMedia({
       video: {
@@ -27,7 +30,7 @@ async function capture(sourceId, width, height, audio) {
     });
     const t = s.getVideoTracks()[0];
     const st = t?.getSettings() || {};
-    api.send('hmd:host-captured', { width: st.width || 0, height: st.height || 0, label: t?.label || '' });
+    api.send('hmd:host-captured', { width: st.width || 0, height: st.height || 0, label: t?.label || '', slot });
     api.send('hmd:log', `captura: ${st.width}x${st.height} a ${Math.round(st.frameRate || 0)} fps, som: ${s.getAudioTracks().length ? 'sim' : 'não'}`);
     return s;
   } catch (e) {
@@ -90,7 +93,7 @@ async function tuneSender(sender) {
   try { await sender.setParameters(p); } catch (e) { console.warn('setParameters', e); }
 }
 
-async function start({ sourceId, width, height, audio, sid: newSid }) {
+async function start({ sourceId, width, height, audio, extras: nExtras = 0, sid: newSid }) {
   stop();
   sid = newSid;
   const my = sid;
@@ -119,12 +122,18 @@ async function start({ sourceId, width, height, audio, sid: newSid }) {
   preferH264(vtr);
   const at = stream.getAudioTracks()[0];
   if (at) pc.addTransceiver(at, { direction: 'sendonly', streams: [stream] });
+  for (let k = 0; k < nExtras; k++) {
+    const tr = pc.addTransceiver('video', { direction: 'sendonly', streams: [new MediaStream()] });
+    preferH264(tr);
+    extras.push({ sender: tr.sender, track: null });
+  }
 
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   if (pc !== me) return;
   api.send('hmd:host-signal', { type: 'offer', sdp: pc.localDescription.sdp }, my);
   await tuneSender(videoSender);
+  for (const x of extras) await tuneSender(x.sender);
   for (const m of pending) await onSignal(m);
   pending = [];
   startSenderStats();
@@ -168,6 +177,24 @@ async function switchScreen({ sourceId, width, height }) {
   }
 }
 
+async function setExtra({ slot, sourceId, width, height }) {
+  const x = extras[(slot | 0) - 1];
+  if (!pc || !x) return;
+  const old = x.track;
+  x.track = null;
+  if (sourceId) {
+    try {
+      const s = await capture(sourceId, width, height, false, slot);
+      x.track = s.getVideoTracks()[0];
+      x.track.contentHint = videoSender?.track?.contentHint || 'motion';
+    } catch (e) {
+      api.send('hmd:log', `tela extra ${slot} falhou:`, e.message);
+    }
+  }
+  try { await x.sender.replaceTrack(x.track); } catch (e) { api.send('hmd:log', 'replaceTrack extra:', e.message); }
+  old?.stop();
+}
+
 function onCtl(data) {
   let m;
   try { m = JSON.parse(data); } catch { return; }
@@ -191,6 +218,8 @@ async function onSignal(m) {
 
 function stop() {
   try { stream?.getTracks().forEach((t) => t.stop()); } catch {}
+  for (const x of extras) try { x.track?.stop(); } catch {}
+  extras = [];
   try { pc?.close(); } catch {}
   pc = null; stream = null; videoSender = null; ctl = null; pending = [];
 }
@@ -202,6 +231,7 @@ function handle(msg) {
     switch (msg.type) {
       case 'start': await start(msg); break;
       case 'switch': await switchScreen(msg); break;
+      case 'extra': await setExtra(msg); break;
       case 'signal': await onSignal(msg.data); break;
       case 'ctl-send': if (ctl?.readyState === 'open') ctl.send(msg.data); break;
       case 'stop': stop(); break;

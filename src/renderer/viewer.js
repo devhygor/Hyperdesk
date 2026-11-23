@@ -167,10 +167,16 @@ function boost(sdp) {
 
 async function onOffer(sdp) {
   try { pc?.close(); } catch {}
+  closeExtras();
+  extraTracks.clear();
   pc = new RTCPeerConnection({ iceServers: [] });
   pc.onicecandidate = (e) => { if (e.candidate) send({ type: 'ice', candidate: e.candidate.toJSON() }); };
   pc.ontrack = (e) => {
-    if (!video.srcObject) video.srcObject = e.streams[0] || new MediaStream([e.track]);
+    // a ordem das faixas de vídeo é a ordem das vagas do outro lado: 0 = tela principal, 1.. = extras
+    const slot = e.track.kind === 'video'
+      ? pc.getTransceivers().filter((t) => t.receiver.track?.kind === 'video').indexOf(e.transceiver) : 0;
+    if (slot > 0) { extraTracks.set(slot, e.track); refreshSpreadButton(); return; }
+    if (!video.srcObject) video.srcObject = new MediaStream([e.track]);
     else if (!video.srcObject.getTracks().includes(e.track)) video.srcObject.addTrack(e.track);
     try { e.receiver.playoutDelayHint = 0; } catch {}
     try { e.receiver.jitterBufferTarget = 0; } catch {}
@@ -211,11 +217,16 @@ function onCtl(e) {
   try { m = JSON.parse(e.data); } catch { return; }
   if (m.t === 'clip' && typeof m.text === 'string') api.send('hmd:viewer-clip', m.text);
   if (m.t === 'screens') fillScreens(m.screens, m.current);
+  // Linux: a pessoa pode escolher outra tela no portal; o outro lado avisa qual ficou em cada vaga
+  if (m.t === 'extra-screen') { const x = extraWins.get(m.slot); if (x) x.sourceId = m.sourceId; }
 }
 api.on('hmd:clip-local', (text) => sendCtl({ t: 'clip', text }));
 
 // ---------------------------------------------------------------- barra de ferramentas
 function fillScreens(list, current) {
+  screensList = list || [];
+  if (current) currentScreen = current;
+  refreshSpreadButton();
   const sel = $('#screens');
   sel.innerHTML = '';
   for (const s of list || []) {
@@ -245,6 +256,7 @@ $('#audio').onclick = (e) => {
 // sempre com o atraso da transmissão inteira, e é isso que mais dá a sensação de "lag".
 function setLocalCursor(on) {
   document.body.classList.toggle('local-cursor', on);
+  if (typeof extraWins !== 'undefined') for (const { win } of extraWins.values()) try { win.document.body.classList.toggle('local-cursor', on); } catch {}
   $('#cursor').textContent = on ? 'Seta local: sim' : 'Seta local: não';
   try { localStorage.setItem('hmd-local-cursor', on ? '1' : '0'); } catch {}
 }
@@ -255,6 +267,7 @@ $('#cursor').onclick = (e) => {
   setLocalCursor(!document.body.classList.contains('local-cursor'));
   e.target.blur();
 };
+$('#spread').onclick = (e) => { releaseAll(); toggleSpread(); e.target.blur(); };
 $('#fs').onclick = async (e) => { await api.invoke('hmd:viewer-fullscreen'); e.target.blur(); };
 $('#close').onclick = () => window.close();
 $('#keysBtn').onclick = (e) => { $('#keys').classList.toggle('open'); e.stopPropagation(); };
@@ -283,10 +296,12 @@ $('#bar').addEventListener('mouseleave', flashBar);
 window.addEventListener('mousemove', (e) => { if (e.clientY < 6) flashBar(); });
 
 // ---------------------------------------------------------------- mouse e teclado
-function videoPoint(e, clamp) {
-  const vw = video.videoWidth, vh = video.videoHeight;
+// O mesmo código serve para a janela principal e para as janelas extras de "Espalhar telas".
+// Nas extras, cada mensagem leva "s" (a tela do outro PC que aquela janela mostra).
+function videoPoint(e, clamp, st, vid) {
+  const vw = vid.videoWidth, vh = vid.videoHeight;
   if (!vw || !vh) return null;
-  const r = stage.getBoundingClientRect();
+  const r = st.getBoundingClientRect();
   const s = Math.min(r.width / vw, r.height / vh);
   const w = vw * s, h = vh * s;
   let x = (e.clientX - (r.left + (r.width - w) / 2)) / w;
@@ -296,61 +311,135 @@ function videoPoint(e, clamp) {
   return { x, y };
 }
 
-stage.addEventListener('pointerdown', (e) => { try { stage.setPointerCapture(e.pointerId); } catch {} });
-stage.addEventListener('mousemove', (e) => {
-  const p = videoPoint(e, pressedButtons.size > 0);
-  if (p) sendIn({ t: 'm', x: p.x, y: p.y });
-});
-stage.addEventListener('mousedown', (e) => {
-  e.preventDefault();
-  window.focus();
-  const p = videoPoint(e, true);
-  if (!p) return;
-  pressedButtons.add(e.button);
-  sendIn({ t: 'b', b: e.button, d: true, x: p.x, y: p.y });
-});
-window.addEventListener('mouseup', (e) => {
-  if (!pressedButtons.has(e.button)) return;
-  e.preventDefault();
-  pressedButtons.delete(e.button);
-  const p = videoPoint(e, true);
-  sendIn({ t: 'b', b: e.button, d: false, ...(p || {}) });
-});
-stage.addEventListener('contextmenu', (e) => e.preventDefault());
-stage.addEventListener('auxclick', (e) => e.preventDefault());
+function typingInForm() { return !$('#overlay').classList.contains('hidden'); }
 
-let wheelY = 0, wheelX = 0;
-stage.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  const mult = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1;
-  // ~100 px por clique da roda no Chromium -> 120 unidades no Windows
-  wheelY += (-e.deltaY * mult * 1.2) / (window.devicePixelRatio || 1);
-  wheelX += (e.deltaX * mult * 1.2) / (window.devicePixelRatio || 1);
-  const y = Math.trunc(wheelY), x = Math.trunc(wheelX);
-  if (y || x) { sendIn({ t: 'w', y, x }); wheelY -= y; wheelX -= x; }
-}, { passive: false });
-
-function typingInForm(e) { return !$('#overlay').classList.contains('hidden'); }
-
-window.addEventListener('keydown', (e) => {
-  if (typingInForm(e)) return;
-  if (e.ctrlKey && e.altKey && e.code === 'Enter') {
+function attachInput(win, st, vid, screenId) {
+  const tag = (o) => { const sid = screenId(); if (sid) o.s = sid; return o; };
+  st.addEventListener('pointerdown', (e) => { try { st.setPointerCapture(e.pointerId); } catch {} });
+  st.addEventListener('mousemove', (e) => {
+    const p = videoPoint(e, pressedButtons.size > 0, st, vid);
+    if (p) sendIn(tag({ t: 'm', x: p.x, y: p.y }));
+  });
+  st.addEventListener('mousedown', (e) => {
     e.preventDefault();
-    releaseAll();
-    api.invoke('hmd:viewer-fullscreen');
-    return;
+    win.focus();
+    const p = videoPoint(e, true, st, vid);
+    if (!p) return;
+    pressedButtons.add(e.button);
+    sendIn(tag({ t: 'b', b: e.button, d: true, x: p.x, y: p.y }));
+  });
+  win.addEventListener('mouseup', (e) => {
+    if (!pressedButtons.has(e.button)) return;
+    e.preventDefault();
+    pressedButtons.delete(e.button);
+    const p = videoPoint(e, true, st, vid);
+    sendIn(tag({ t: 'b', b: e.button, d: false, ...(p || {}) }));
+  });
+  st.addEventListener('contextmenu', (e) => e.preventDefault());
+  st.addEventListener('auxclick', (e) => e.preventDefault());
+
+  let wheelY = 0, wheelX = 0;
+  st.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const mult = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1;
+    // ~100 px por clique da roda no Chromium -> 120 unidades no Windows
+    wheelY += (-e.deltaY * mult * 1.2) / (win.devicePixelRatio || 1);
+    wheelX += (e.deltaX * mult * 1.2) / (win.devicePixelRatio || 1);
+    const y = Math.trunc(wheelY), x = Math.trunc(wheelX);
+    if (y || x) { sendIn({ t: 'w', y, x }); wheelY -= y; wheelX -= x; }
+  }, { passive: false });
+
+  win.addEventListener('keydown', (e) => {
+    if (win === window && typingInForm()) return;
+    if (e.ctrlKey && e.altKey && e.code === 'Enter') {
+      e.preventDefault();
+      releaseAll();
+      if (win === window) api.invoke('hmd:viewer-fullscreen');
+      return;
+    }
+    if (e.ctrlKey && e.altKey && e.code === 'KeyE') { e.preventDefault(); releaseAll(); toggleSpread(); return; }
+    e.preventDefault();
+    pressedKeys.add(e.code);
+    sendIn({ t: 'k', c: e.code, d: true }); // repetições também vão: o Windows não repete tecla injetada
+  }, true);
+  win.addEventListener('keyup', (e) => {
+    if (win === window && typingInForm()) return;
+    e.preventDefault();
+    if (!pressedKeys.delete(e.code) && e.code !== 'PrintScreen') return;
+    if (e.code === 'PrintScreen') sendIn({ t: 'k', c: e.code, d: true }); // o Windows só entrega o keyup do Print
+    sendIn({ t: 'k', c: e.code, d: false });
+  }, true);
+  win.addEventListener('blur', () => releaseAll());
+}
+attachInput(window, stage, video, () => null);
+
+// ---------------------------------------------------------------- espalhar telas
+// Cada tela do outro PC numa janela própria, em tela cheia, num monitor deste PC. As janelas extras
+// são abertas daqui (window.open) e rodam no mesmo processo: dá para entregar o vídeo direto a elas.
+let screensList = [];
+let currentScreen = null;
+const extraTracks = new Map(); // vaga -> faixa de vídeo recebida
+var extraWins = new Map();     // (var: a seta local consulta antes desta linha) vaga -> { win, sourceId }
+let localDisplays = { displays: [], mine: null };
+
+const realScreens = () => screensList.filter((s) => !s.all);
+async function refreshSpreadButton() {
+  try { localDisplays = await api.invoke('hmd:viewer-displays'); } catch {}
+  const can = realScreens().length > 1 && localDisplays.displays.length > 1 && extraTracks.size > 0;
+  $('#spread').classList.toggle('hidden', !can && !extraWins.size);
+  $('#spread').textContent = extraWins.size ? 'Juntar telas' : 'Espalhar telas';
+}
+
+function openExtra(slot, sourceId, display) {
+  const scr = screensList.find((s) => s.sourceId === sourceId);
+  const w = window.open('extra.html', `extra-${slot}-${display.id}`, 'popup');
+  if (!w) return;
+  extraWins.set(slot, { win: w, sourceId });
+  sendCtl({ t: 'extra', slot, sourceId });
+  let done = false;
+  const setup = () => {
+    const d = w.document;
+    const st = d.getElementById('stage');
+    const vid = d.getElementById('v');
+    if (done || !st || !vid) return;
+    done = true;
+    d.title = `Hyperdesk — ${scr?.label || 'tela'}`;
+    vid.srcObject = new MediaStream([extraTracks.get(slot)]);
+    d.body.classList.toggle('local-cursor', document.body.classList.contains('local-cursor'));
+    attachInput(w, st, vid, () => extraWins.get(slot)?.sourceId || null);
+    w.addEventListener('beforeunload', () => {
+      if (extraWins.get(slot)?.win !== w) return;
+      extraWins.delete(slot);
+      sendCtl({ t: 'extra', slot, sourceId: null });
+      refreshSpreadButton();
+    });
+  };
+  // a janela nova começa em about:blank e troca para extra.html: espera o documento certo
+  const poll = setInterval(() => {
+    try { if (w.closed) return clearInterval(poll); if (w.document.getElementById('v')) { clearInterval(poll); setup(); } } catch {}
+  }, 50);
+}
+
+async function toggleSpread() {
+  if (extraWins.size) return closeExtras();
+  await refreshSpreadButton();
+  const others = localDisplays.displays.filter((d) => d.id !== localDisplays.mine);
+  const remote = realScreens().filter((s) => s.sourceId !== currentScreen);
+  const n = Math.min(others.length, remote.length, extraTracks.size);
+  if (!n) return;
+  for (let k = 0; k < n; k++) openExtra(k + 1, remote[k].sourceId, others[k]);
+  api.invoke('hmd:viewer-fullscreen', true);
+  refreshSpreadButton();
+}
+function closeExtras() {
+  for (const [slot, { win }] of [...extraWins]) {
+    extraWins.delete(slot);
+    sendCtl({ t: 'extra', slot, sourceId: null });
+    try { win.close(); } catch {}
   }
-  e.preventDefault();
-  pressedKeys.add(e.code);
-  sendIn({ t: 'k', c: e.code, d: true }); // repetições também vão: o Windows não repete tecla injetada
-}, true);
-window.addEventListener('keyup', (e) => {
-  if (typingInForm(e)) return;
-  e.preventDefault();
-  if (!pressedKeys.delete(e.code) && e.code !== 'PrintScreen') return;
-  if (e.code === 'PrintScreen') sendIn({ t: 'k', c: e.code, d: true }); // o Windows só entrega o keyup do Print
-  sendIn({ t: 'k', c: e.code, d: false });
-}, true);
+  refreshSpreadButton();
+}
+window.addEventListener('beforeunload', () => { for (const { win } of extraWins.values()) try { win.close(); } catch {} });
 
 function releaseAll() {
   for (const c of pressedKeys) sendIn({ t: 'k', c, d: false });
@@ -358,22 +447,25 @@ function releaseAll() {
   pressedKeys.clear();
   pressedButtons.clear();
 }
-window.addEventListener('blur', releaseAll);
 
 // ---------------------------------------------------------------- estatísticas
 // Mostra na barra (e grava no log) quanto atraso cada parte põe: a espera do buffer de vídeo,
 // a decodificação neste PC e a rede. Assim dá para saber de onde vem o "lag".
 let prev = null;
+let prevA = null;
 let statsTick = 0;
 let lastLogged = 0;
+const mainTrackId = () => video.srcObject?.getVideoTracks()[0]?.id;
 function startStats() {
   setInterval(async () => {
     if (!pc) return;
     const st = await pc.getStats();
-    let v = null, rtt = null;
+    let v = null, a = null, rtt = null;
     const codecs = {};
     st.forEach((r) => {
-      if (r.type === 'inbound-rtp' && r.kind === 'video') v = r;
+      if (r.type === 'inbound-rtp' && r.kind === 'audio') a = r;
+      // só a tela principal (as vagas extras do "Espalhar telas" também são vídeo)
+      if (r.type === 'inbound-rtp' && r.kind === 'video' && r.trackIdentifier === mainTrackId()) v = r;
       if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') rtt = r.currentRoundTripTime;
       if (r.type === 'codec') codecs[r.id] = r.mimeType;
     });
@@ -384,6 +476,12 @@ function startStats() {
     const mbps = dt > 0 ? (d('bytesReceived') * 8) / dt / 1e6 : 0;
     const emitted = d('jitterBufferEmittedCount');
     const bufferMs = emitted > 0 ? (d('jitterBufferDelay') / emitted) * 1000 : 0;
+    // alvo do buffer e o mínimo imposto (sincronia com o som ou jitterBufferTarget)
+    const targetMs = emitted > 0 ? (d('jitterBufferTargetDelay') / emitted) * 1000 : 0;
+    const minMs = emitted > 0 ? (d('jitterBufferMinimumDelay') / emitted) * 1000 : 0;
+    const aEmit = (a?.jitterBufferEmittedCount || 0) - (prevA?.jitterBufferEmittedCount || 0);
+    const audioMs = aEmit > 0 ? (((a.jitterBufferDelay || 0) - (prevA?.jitterBufferDelay || 0)) / aEmit) * 1000 : 0;
+    prevA = a;
     const decoded = d('framesDecoded');
     const decodeMs = decoded > 0 ? (d('totalDecodeTime') / decoded) * 1000 : 0;
     const dropped = d('framesDropped');
@@ -402,7 +500,8 @@ function startStats() {
     if (params.statsLog || statsTick <= 5 || (bad && now - lastLogged > 30_000)) {
       lastLogged = now;
       api.send('hmd:log', `recebendo: ${v.frameWidth}x${v.frameHeight} ${fps} fps ${mbps.toFixed(1)} Mb/s · atraso ~${delay} ms ` +
-        `(buffer ${Math.round(bufferMs)}, decodificar ${decodeMs.toFixed(1)}, rede ${Math.round(netMs)}) · perdidos ${dropped} ` +
+        `(buffer ${Math.round(bufferMs)} [alvo ${Math.round(targetMs)}, mínimo ${Math.round(minMs)}], decodificar ${decodeMs.toFixed(1)}, ` +
+        `rede ${Math.round(netMs)}; som ${Math.round(audioMs)}) · perdidos ${dropped} ` +
         `· decodificador ${v.decoderImplementation || '?'}${v.powerEfficientDecoder ? ' (hardware)' : ''}`);
     }
   }, 1000);

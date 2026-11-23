@@ -132,6 +132,14 @@ Fora da rede de casa (pelo Tailscale, por exemplo), digite o IP no campo de cone
 
 Na janela de controle, a barra no topo some sozinha. Encoste o mouse no alto da janela para ela voltar. Nela dá para trocar de monitor, alternar entre Fluidez e Nitidez, ligar ou desligar o som, usar teclas que o sistema deste PC não deixa passar (Win, Alt+Tab, Ctrl+Shift+Esc…) e entrar em tela cheia (`Ctrl+Alt+Enter`).
 
+A **seta local** vem ligada: a seta deste PC aparece por cima da imagem e anda sem atraso (a do outro PC vem dentro do vídeo). A barra mostra o **atraso estimado**; passe o mouse em cima para ver quanto vem do buffer, da decodificação e da rede.
+
+### Vários monitores
+
+- **Espalhar telas** (`Ctrl+Alt+E`): se o outro PC tem duas telas ou mais e este PC também, cada tela do outro PC abre em tela cheia num monitor deste. O mouse passa de um monitor para o outro como se fosse um PC só. Clique em **Juntar telas** para voltar.
+- **Todas as telas**: na lista de telas, mostra todos os monitores do outro PC juntos numa imagem só (para quem controla de um notebook com uma tela). Só quando o PC controlado é Windows, e fica em torno de 30 fps.
+- **Monitor virtual**: com um driver de monitor virtual no PC controlado (no Windows, o [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)), a tela de mentira aparece como mais uma tela, marcada "(monitor virtual)", e funciona com as opções acima.
+
 O texto copiado num PC vai sozinho para a área de transferência do outro.
 
 Enquanto alguém controla, o PC mostra um aviso fixo no topo com o botão **Desconectar**.
@@ -177,7 +185,7 @@ $env:HMD_PROFILE='a'; $env:HMD_TEST_PASSWORD='teste12345'; npx electron .
 $env:HMD_PROFILE='b'; $env:HMD_PORT='47820'; $env:HMD_AUTOCONNECT='127.0.0.1:47810'; $env:HMD_AUTOSECRET='teste12345'; $env:HMD_STATS_LOG='1'; npx electron .
 ```
 
-`HMD_SNAPSHOT=<pasta>` salva prints das janelas depois de 9 s.
+`HMD_SNAPSHOT=<pasta>` salva prints das janelas depois de 9 s (`HMD_SNAPSHOT_DELAY` muda o tempo). `HMD_VIEWER_JS` roda um JavaScript nas janelas do viewer antes do print, por exemplo `toggleSpread()`.
 
 ### Lançar uma versão
 
@@ -197,7 +205,7 @@ Para gerar localmente: `npm run dist:win` ou `npm run dist:linux` (o build do Li
 
 ## Próximos passos
 
-- **Monitor virtual**: criar uma segunda tela falsa no PC controlado (Virtual Display Driver) e mostrá-la neste PC, como se o notebook tivesse dois monitores.
+- **Monitor virtual no Linux**: criar uma segunda tela de mentira no notebook (GNOME/Wayland) para o "Espalhar telas" mostrar duas telas dele nos dois monitores do PC.
 - Rodar como serviço (tela de login/UAC), transferência de arquivos, mais de um controlador ao mesmo tempo.
 
 ## Licença

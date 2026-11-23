@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self'; media-src 'self' blob: mediastream:">
+  <title>Hyperdesk</title>
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<!-- Janela extra do "Espalhar telas": mostra outra tela do PC controlado num monitor deste.
+     Quem preenche o vídeo e cuida do mouse e do teclado é a janela principal (viewer.js). -->
+<body class="extra">
+  <div id="stage">
+    <video id="v" autoplay playsinline muted></video>
+  </div>
+</body>
+</html>
