@@ -109,7 +109,7 @@ curl -fsSL https://raw.githubusercontent.com/devhygor/Hyperdesk/main/install.sh 
 #### Bom saber no Linux
 
 - Se faltar a permissão de controle, o app mostra um **aviso amarelo** com o botão **Liberar agora**, que pede a senha numa janela do sistema e resolve sem terminal.
-- No **Wayland** (padrão no Ubuntu e no Fedora recentes), o sistema pede para escolher a tela a compartilhar **a cada conexão**. É uma regra de segurança do próprio Wayland. Para não ter essa pergunta, escolha a sessão **"Ubuntu em Xorg"** (ou "Xorg") na tela de login, na engrenagem do canto.
+- No **Wayland** (padrão no Ubuntu e no Fedora recentes), a cada conexão aparece **no PC Linux** uma janela do sistema para escolher a tela, e alguém precisa clicar em **Compartilhar** lá. É uma regra de segurança do próprio Wayland. Em distros que ainda têm a sessão **Xorg** na tela de login (engrenagem do canto), ela evita essa pergunta. O Ubuntu 25.10 e os mais novos já não têm essa opção.
 - O som do Linux ainda não é transmitido (só a imagem).
 
 #### Problemas comuns no Linux
@@ -119,6 +119,8 @@ curl -fsSL https://raw.githubusercontent.com/devhygor/Hyperdesk/main/install.sh 
 | `error loading libfuse.so.2` | Rode o instalador de uma linha (ele instala o FUSE certo para a sua distro). |
 | `The SUID sandbox helper binary was found, but is not configured correctly` | Bloqueio do AppArmor do Ubuntu 23.10+. Rode o instalador de uma linha de novo: ele cria o perfil que libera o Hyperdesk. |
 | `!` amarelo ou `i` azul durante a instalação | São avisos, não erros. A instalação só falhou se aparecer `Erro:` em vermelho. |
+| O app fecha depois de escolher a tela na janela do sistema (Wayland) | Corrigido na v0.1.2. Atualize (o app avisa, ou rode o instalador de uma linha de novo). |
+| Qualquer outro problema | No app, abra **Sobre → Abrir logs** e mande o arquivo `hyperdesk.log` (ou use **Relatar um problema**). |
 
 ## Usar
 
@@ -141,6 +143,10 @@ O app consulta as releases deste repositório ao abrir e a cada 6 horas. Quando 
 - **Instalador do Windows e AppImage**: o botão **Atualizar agora** baixa a versão nova, e **Reiniciar e atualizar** instala.
 - **Portátil e .deb**: o botão **Baixar** abre a página da release.
 - **Linux instalado pelo script**: é o AppImage, então se atualiza sozinho.
+
+Para conferir na hora, abra **Sobre** (no canto superior direito) e clique em **Buscar atualização**. Essa tela também mostra a versão instalada, quem criou o app, os links do projeto e o botão **Abrir logs**.
+
+Os logs ficam em `%APPDATA%\Hyperdesk\logs` no Windows e em `~/.config/Hyperdesk/logs` no Linux.
 
 ## Como funciona
 

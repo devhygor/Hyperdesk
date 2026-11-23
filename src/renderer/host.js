@@ -10,7 +10,24 @@ let pending = [];
 
 const MAX_BITRATE = 30_000_000;
 
+// Linux/Wayland: getUserMedia com chromeMediaSourceId derruba o app depois que a pessoa escolhe a
+// tela na janela do sistema (portal). O caminho suportado é o getDisplayMedia: o main responde pelo
+// setDisplayMediaRequestHandler e o portal do sistema cuida da escolha.
+const VIA_PORTAL = navigator.userAgent.includes('Linux');
+
+async function captureViaPortal() {
+  const s = await navigator.mediaDevices.getDisplayMedia({
+    video: { frameRate: { ideal: 60, max: 60 } },
+    audio: false, // o Linux não tem captura do som do sistema por aqui
+  });
+  const t = s.getVideoTracks()[0];
+  const st = t?.getSettings() || {};
+  api.send('hmd:host-captured', { width: st.width || 0, height: st.height || 0, label: t?.label || '' });
+  return s;
+}
+
 async function capture(sourceId, width, height, audio) {
+  if (VIA_PORTAL) return captureViaPortal();
   const video = {
     mandatory: {
       chromeMediaSource: 'desktop',
@@ -139,7 +156,7 @@ function stop() {
 
 // a sinalização chega em ordem; processamos em fila para não aplicar ICE antes da resposta
 let chain = Promise.resolve();
-api.on('hmd:host', (msg) => {
+function handle(msg) {
   chain = chain.then(async () => {
     switch (msg.type) {
       case 'start': await start(msg); break;
@@ -149,4 +166,8 @@ api.on('hmd:host', (msg) => {
       case 'stop': stop(); break;
     }
   }).catch((e) => console.error(e));
-});
+}
+api.on('hmd:host', handle);
+// no Linux o main chama por aqui com executeJavaScript(…, userGesture=true): o getDisplayMedia
+// pode exigir um "gesto do usuário", e esta janela é invisível
+window.__hmdHost = (msg) => { handle(msg); return true; };

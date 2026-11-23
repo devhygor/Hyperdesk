@@ -182,3 +182,47 @@ api.on('hmd:peers', (p) => { peers = p; renderPeers(); });
   peers = await api.invoke('hmd:get-peers');
   renderPeers();
 })();
+
+$('#openLogs').onclick = () => api.invoke('hmd:open-logs');
+
+// ---- Sobre
+async function openAbout() {
+  const a = await api.invoke('hmd:about');
+  $('#aboutVersion').textContent = a.version;
+  $('#aboutOs').textContent = a.os + (a.session ? ` · ${a.session}` : '');
+  $('#aboutTech').textContent = `Electron ${a.electron} · Chromium ${a.chrome.split('.')[0]}`;
+  $('#aboutUpdateText').textContent = a.autoUpdate
+    ? 'O app verifica sozinho ao abrir e a cada 6 horas, e instala com um clique.'
+    : 'O app verifica sozinho ao abrir e a cada 6 horas. Nesta forma de instalação, a versão nova é baixada pela página.';
+  $('#about').classList.remove('hidden');
+}
+$('#openAbout').onclick = openAbout;
+$('#aboutClose').onclick = () => $('#about').classList.add('hidden');
+$('#about').onclick = (e) => { if (e.target.id === 'about') $('#about').classList.add('hidden'); };
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('#about').classList.add('hidden'); });
+for (const el of document.querySelectorAll('[data-url]')) {
+  el.onclick = (e) => { e.preventDefault(); api.invoke('hmd:open-url', el.dataset.url); };
+}
+$('#aboutCheck').onclick = async (e) => {
+  const btn = e.target;
+  const txt = $('#aboutUpdateText');
+  btn.disabled = true;
+  btn.textContent = 'Buscando…';
+  txt.classList.remove('ok');
+  try {
+    const u = await api.invoke('hmd:update-check');
+    if (u.checkError) {
+      txt.textContent = `Não consegui consultar o GitHub agora (${u.checkError}). Verifique a internet.`;
+    } else if (u.state === 'available' || u.state === 'downloading' || u.state === 'ready') {
+      txt.textContent = `Versão ${u.latest} disponível! Use a faixa azul no topo da janela para atualizar.`;
+      renderUpdate(u);
+    } else {
+      txt.textContent = `Você está na versão mais recente (${u.current}).`;
+      txt.classList.add('ok');
+    }
+  } catch (err) {
+    txt.textContent = `Falhou: ${errMsg(err)}`;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Buscar atualização';
+};

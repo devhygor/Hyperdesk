@@ -25,6 +25,34 @@ const env = (k) => (DEV ? process.env[k] : undefined);
 if (env('HMD_PROFILE')) {
   app.setPath('userData', path.join(app.getPath('appData'), 'Hyperdesk-' + env('HMD_PROFILE')));
 }
+// ---------------------------------------------------------------- log em arquivo
+// Tudo o que vai para o console também vai para <userData>/logs/hyperdesk.log (troca ao passar de
+// 2 MB, guardando o anterior como .old), para dar para diagnosticar sem terminal aberto.
+const LOG_DIR = path.join(app.getPath('userData'), 'logs');
+const LOG_FILE = path.join(LOG_DIR, 'hyperdesk.log');
+(() => {
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    if (fs.existsSync(LOG_FILE) && fs.statSync(LOG_FILE).size > 2 * 1024 * 1024) {
+      fs.renameSync(LOG_FILE, LOG_FILE + '.old');
+    }
+  } catch {}
+  const write = (level, args) => {
+    const line = `${new Date().toISOString()} ${level} ${args.map((a) => (a instanceof Error ? a.stack : typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`;
+    try { fs.appendFileSync(LOG_FILE, line); } catch {}
+  };
+  for (const [name, level] of [['log', 'INFO'], ['warn', 'WARN'], ['error', 'ERRO']]) {
+    const orig = console[name].bind(console);
+    console[name] = (...a) => { write(level, a); orig(...a); };
+  }
+  console.log(`[Hyperdesk] iniciando v${app.getVersion()} em ${process.platform} ${os.release()} ` +
+    `(sessão ${process.env.XDG_SESSION_TYPE || '-'}, electron ${process.versions.electron})`);
+  process.on('uncaughtException', (e) => console.error('[erro não tratado]', e));
+  process.on('unhandledRejection', (e) => console.error('[promessa rejeitada]', e));
+  app.on('render-process-gone', (_e, wc, d) => console.error('[processo de janela morreu]', wc.getURL().split('/').pop(), d.reason, d.exitCode));
+  app.on('child-process-gone', (_e, d) => console.error('[processo interno morreu]', d.type, d.reason, d.exitCode, d.serviceName || ''));
+})();
+
 const PORT = Number(env('HMD_PORT')) || 47810;
 const DISCOVERY_PORT = 47811;
 const APP_ID = 'hyperdesk';
@@ -186,10 +214,16 @@ function startServer() {
   });
 }
 
+const IS_LINUX = process.platform === 'linux';
+
 async function listScreens() {
-  const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
   const displays = screen.getAllDisplays();
   const primary = screen.getPrimaryDisplay();
+  // No Linux não chamamos o desktopCapturer aqui: no Wayland cada chamada abre a janela do sistema
+  // para escolher a tela. A lista sai das telas do sistema, e a escolha de verdade é feita no portal.
+  const sources = IS_LINUX
+    ? displays.map((d) => ({ id: `display:${d.id}`, display_id: String(d.id) }))
+    : await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
   return sources.map((s, i) => {
     const d = displays.find((x) => String(x.id) === s.display_id) || displays[i] || primary;
     // pixels físicos (o SendInput trabalha neles); dipToScreenRect só existe no Windows
@@ -220,9 +254,47 @@ function startCapture(scr, first) {
     width: Math.max(...rs.map((r) => r.x + r.width)) - x0,
     height: Math.max(...rs.map((r) => r.y + r.height)) - y0,
   });
-  hostWin.webContents.send('hmd:host', {
+  const msg = {
     type: first ? 'start' : 'switch',
-    sourceId: scr.sourceId, width: scr.width, height: scr.height, audio: true,
+    sourceId: scr.sourceId, width: scr.width, height: scr.height, audio: !IS_LINUX,
+  };
+  if (IS_LINUX) {
+    // com "gesto do usuário", porque o getDisplayMedia pode exigir isso e a janela é invisível
+    hostWin.webContents
+      .executeJavaScript(`window.__hmdHost(${JSON.stringify(msg)})`, true)
+      .catch((e) => console.error('[servidor] captura:', e.message));
+  } else {
+    hostWin.webContents.send('hmd:host', msg);
+  }
+}
+
+// Linux: o portal decide qual tela é capturada. Descobrimos qual é pelo tamanho do vídeo,
+// para o mouse cair no lugar certo.
+function onCaptured({ width, height, label }) {
+  if (!session || !width || !height) return;
+  console.log(`[servidor] capturando ${width}x${height} ${label || ''}`);
+  const match = session.screens.find((s) => s.width === width && s.height === height)
+    || session.screens.find((s) => Math.abs(s.width / s.height - width / height) < 0.01)
+    || session.current;
+  if (match && match !== session.current) {
+    session.current = match;
+    sendCtlToViewer({ t: 'screens', screens: publicScreens(), current: match.sourceId });
+  }
+}
+
+// Linux: responde ao getDisplayMedia da janela invisível abrindo o portal do sistema.
+function setupDisplayMediaHandler() {
+  if (!IS_LINUX) return;
+  const { session: electronSession } = require('electron');
+  electronSession.defaultSession.setDisplayMediaRequestHandler(async (_req, callback) => {
+    try {
+      const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
+      if (sources.length) callback({ video: sources[0] });
+      else callback({});
+    } catch (e) {
+      console.error('[servidor] portal:', e.message);
+      callback({});
+    }
   });
 }
 
@@ -512,6 +584,22 @@ function registerIpc() {
   ipcMain.handle('hmd:update-check', () => updater.check());
   ipcMain.handle('hmd:update-install', () => updater.install());
   ipcMain.handle('hmd:update-open', () => shell.openExternal(updater.info().url));
+  ipcMain.handle('hmd:open-logs', () => shell.openPath(LOG_DIR));
+  ipcMain.handle('hmd:about', () => ({
+    version: app.getVersion(),
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+    os: `${process.platform === 'win32' ? 'Windows' : process.platform === 'linux' ? 'Linux' : process.platform} ${os.release()} (${process.arch})`,
+    session: process.env.XDG_SESSION_TYPE || '',
+    input: injector.status || '',
+    autoUpdate: updater.canAutoInstall(),
+    logDir: LOG_DIR,
+  }));
+  ipcMain.handle('hmd:open-url', (_e, url) => {
+    // só links do próprio projeto
+    if (/^https:\/\/github\.com\/devhygor(\/|$)/.test(String(url))) shell.openExternal(url);
+  });
   ipcMain.handle('hmd:fix-linux-input', () => fixLinuxInput());
   ipcMain.handle('hmd:update-restart', () => { app.isQuitting = true; updater.restart(); });
   ipcMain.handle('hmd:get-peers', () => peerList());
@@ -598,6 +686,7 @@ function registerIpc() {
     console.log('[servidor] webrtc:', st);
     if (st === 'failed') endSession();
   });
+  ipcMain.on('hmd:host-captured', (_e, info) => onCaptured(info || {}));
   ipcMain.on('hmd:host-error', (_e, msg) => {
     console.error('[servidor] captura:', msg);
     session?.send({ type: 'error', reason: 'capture', detail: String(msg) });
@@ -619,6 +708,7 @@ app.whenReady().then(() => {
   injector.start();
   startServer();
   startDiscovery();
+  setupDisplayMediaHandler();
   createHostWindow();
   createMainWindow();
   createTray();
@@ -637,6 +727,7 @@ app.whenReady().then(() => {
     setTimeout(async () => {
       const dir = env('HMD_SNAPSHOT');
       fs.mkdirSync(dir, { recursive: true });
+      if (mainWin && env('HMD_SNAPSHOT_JS')) { await mainWin.webContents.executeJavaScript(env('HMD_SNAPSHOT_JS'), true); await new Promise((r) => setTimeout(r, 2500)); }
       if (mainWin) fs.writeFileSync(path.join(dir, 'main.png'), (await mainWin.webContents.capturePage()).toPNG());
       let i = 0;
       for (const w of viewerWins.keys()) fs.writeFileSync(path.join(dir, `viewer${i++}.png`), (await w.webContents.capturePage()).toPNG());

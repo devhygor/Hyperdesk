@@ -21,7 +21,44 @@
         <p class="muted">Acesse e controle os PCs da sua casa</p>
       </div>
     </div>
+    <button id="openAbout" class="ghost logs-btn">Sobre</button>
   </header>
+
+  <div id="about" class="modal hidden">
+    <div class="modal-card">
+      <button class="ghost modal-x" id="aboutClose" title="Fechar">✕</button>
+      <div class="about-head">
+        <div class="logo big"><span></span><span></span></div>
+        <div>
+          <h2>Hyperdesk</h2>
+          <div class="muted">Versão <b id="aboutVersion"></b></div>
+        </div>
+      </div>
+      <p>Acesso remoto para os PCs de casa: veja a tela de outro PC e controle-o com o mouse e o teclado, direto pela rede local, sem servidor no meio.</p>
+
+      <div class="about-rows">
+        <div><span class="muted">Criado por</span><span>Hygor Rocha · <a href="#" data-url="https://github.com/devhygor">@devhygor</a></span></div>
+        <div><span class="muted">Código</span><a href="#" data-url="https://github.com/devhygor/Hyperdesk">github.com/devhygor/Hyperdesk</a></div>
+        <div><span class="muted">Licença</span><a href="#" data-url="https://github.com/devhygor/Hyperdesk/blob/main/LICENSE">MIT (código aberto)</a></div>
+        <div><span class="muted">Sistema</span><span id="aboutOs"></span></div>
+        <div><span class="muted">Base</span><span id="aboutTech"></span></div>
+      </div>
+
+      <div class="about-update">
+        <div>
+          <b>Atualizações</b>
+          <div class="muted" id="aboutUpdateText">O app verifica sozinho ao abrir e a cada 6 horas.</div>
+        </div>
+        <button class="primary" id="aboutCheck">Buscar atualização</button>
+      </div>
+
+      <div class="row about-links">
+        <button class="ghost" data-url="https://github.com/devhygor/Hyperdesk/releases">Ver todas as versões</button>
+        <button class="ghost" data-url="https://github.com/devhygor/Hyperdesk/issues/new">Relatar um problema</button>
+        <button class="ghost" id="openLogs" title="Abre a pasta com o registro do app, para mandar quando algo der errado">Abrir logs</button>
+      </div>
+    </div>
+  </div>
 
   <main class="grid">
     <!-- este PC -->

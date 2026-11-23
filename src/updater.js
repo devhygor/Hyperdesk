@@ -45,11 +45,15 @@ async function check() {
     const r = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
       headers: { 'User-Agent': 'Hyperdesk-updater', Accept: 'application/vnd.github+json' },
     });
-    if (!r.ok) return info;
+    if (!r.ok) throw new Error(`GitHub respondeu ${r.status}`);
     const rel = await r.json();
     const latest = String(rel.tag_name || '').replace(/^v/, '');
-    if (!latest || !newer(latest, info.current)) return info;
-    if (info.state === 'downloading' || info.state === 'ready') return info;
+    // "published" é a última versão publicada, mesmo que seja igual à atual (para a tela Sobre)
+    info.published = latest;
+    info.checkedAt = Date.now();
+    info.checkError = null;
+    if (!latest || !newer(latest, info.current)) return { ...info };
+    if (info.state === 'downloading' || info.state === 'ready') return { ...info };
     set({ latest, url: rel.html_url || RELEASES, state: 'available', canInstall: canAutoInstall() });
     if (notified !== latest && Notification.isSupported()) {
       notified = latest;
@@ -62,8 +66,10 @@ async function check() {
     }
   } catch (e) {
     console.error('[atualização]', e.message);
+    info.checkError = e.message;
+    info.checkedAt = Date.now();
   }
-  return info;
+  return { ...info };
 }
 
 async function install() {
@@ -96,4 +102,4 @@ function start({ changed, clicked }) {
   setInterval(check, EVERY);
 }
 
-module.exports = { start, check, install, restart, info: () => ({ ...info }), RELEASES };
+module.exports = { start, check, install, restart, canAutoInstall, info: () => ({ ...info }), RELEASES };
