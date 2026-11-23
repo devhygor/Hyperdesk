@@ -187,7 +187,9 @@ def main():
             pass
         return
     wayland = os.environ.get('XDG_SESSION_TYPE') == 'wayland' or bool(os.environ.get('WAYLAND_DISPLAY'))
-    print('ready', inj.name, 'wayland' if wayland else 'x11', flush=True)
+    # no Wayland o XTest só alcança apps XWayland: conta como "parcial" para o app oferecer liberar o uinput
+    extra = ' sem-uinput' if wayland and inj.name == 'xtest' else ''
+    print('ready', inj.name, 'wayland' if wayland else 'x11', extra.strip(), flush=True)
     for line in sys.stdin:
         p = line.split()
         if not p:

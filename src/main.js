@@ -281,7 +281,37 @@ async function handleCtl(str) {
   }
 }
 
-const sendCtlToViewer = (m) => hostWin?.webContents.send('hmd:host', { type: 'ctl-send', data: JSON.stringify(m) });
+// Linux: libera o /dev/uinput para o usuário logado (mesma regra do install.sh), pedindo a senha
+// pela janela do sistema (pkexec), e reabre o injetor.
+function fixLinuxInput() {
+  if (process.platform !== 'linux') return { ok: false, message: 'Só no Linux.' };
+  const script = [
+    'mkdir -p /etc/udev/rules.d /etc/modules-load.d',
+    `printf '%s\\n' 'KERNEL=="uinput", MODE="0660", TAG+="uaccess", OPTIONS+="static_node=uinput"' > /etc/udev/rules.d/60-hyperdesk-uinput.rules`,
+    'echo uinput > /etc/modules-load.d/hyperdesk-uinput.conf',
+    'modprobe uinput || true',
+    'udevadm control --reload-rules || true',
+    'udevadm trigger --subsystem-match=misc --action=change || true',
+  ].join(' && ');
+  return new Promise((resolve) => {
+    const { spawn } = require('child_process');
+    const p = spawn('pkexec', ['sh', '-c', script], { stdio: 'ignore' });
+    p.on('error', () => resolve({ ok: false, message: 'Não achei o pkexec. Rode o instalador pelo terminal (veja o README).' }));
+    p.on('exit', (code) => {
+      if (code !== 0) return resolve({ ok: false, message: code === 126 ? 'Cancelado.' : `Falhou (código ${code}).` });
+      setTimeout(() => {
+        injector.restart();
+        setTimeout(() => {
+          pushState();
+          const ok = (injector.status || '').startsWith('ok');
+          resolve({ ok, message: ok ? 'Controle liberado.' : 'Regra criada. Se ainda não funcionar, saia e entre de novo na sessão.' });
+        }, 3000);
+      }, 800);
+    });
+  });
+}
+
+const sendCtlToViewer =(m) => hostWin?.webContents.send('hmd:host', { type: 'ctl-send', data: JSON.stringify(m) });
 
 // ---------------------------------------------------------------- área de transferência (texto, nos dois sentidos)
 let lastClip = '';
@@ -482,6 +512,7 @@ function registerIpc() {
   ipcMain.handle('hmd:update-check', () => updater.check());
   ipcMain.handle('hmd:update-install', () => updater.install());
   ipcMain.handle('hmd:update-open', () => shell.openExternal(updater.info().url));
+  ipcMain.handle('hmd:fix-linux-input', () => fixLinuxInput());
   ipcMain.handle('hmd:update-restart', () => { app.isQuitting = true; updater.restart(); });
   ipcMain.handle('hmd:get-peers', () => peerList());
   ipcMain.handle('hmd:new-code', () => { newCode(); return state(); });

@@ -35,12 +35,16 @@ function renderState(s) {
   $('#passSet').textContent = s.hasPassword ? 'Trocar' : 'Definir';
   $('#passClear').classList.toggle('hidden', !s.hasPassword);
   $('#version').textContent = `v${s.version}`;
-  const badInput = s.inputStatus && !s.inputStatus.startsWith('ok');
+  const badInput = s.inputStatus && (!s.inputStatus.startsWith('ok') || s.inputStatus.includes('sem-uinput'));
   $('#inputWarn').classList.toggle('hidden', !badInput);
   if (badInput) {
-    $('#inputWarn').textContent = s.platform === 'linux'
-      ? `Os outros PCs vão ver esta tela, mas ainda não conseguem controlar o mouse e o teclado (${s.inputStatus}). Veja "Linux" no README para liberar.`
+    const fixable = s.platform === 'linux' && /uinput|display/i.test(s.inputStatus);
+    $('#inputWarnText').textContent = s.platform === 'linux'
+      ? (/python3|ENOENT/i.test(s.inputStatus)
+        ? 'Os outros PCs vão ver esta tela, mas não conseguem controlar: falta o python3. Instale com o gerenciador de pacotes da sua distro.'
+        : 'Os outros PCs vão ver esta tela, mas ainda não conseguem controlar o mouse e o teclado. Falta liberar uma permissão do sistema (só uma vez).')
       : `O controle de mouse e teclado não iniciou: ${s.inputStatus}`;
+    $('#fixInput').classList.toggle('hidden', !fixable);
   }
   renderRecent();
 }
@@ -124,6 +128,17 @@ $('#connectForm').onsubmit = (e) => {
   e.preventDefault();
   const v = $('#hostInput').value.trim();
   if (v) connect(v);
+};
+
+$('#fixInput').onclick = async (e) => {
+  e.target.disabled = true;
+  e.target.textContent = 'Aguardando a senha…';
+  try {
+    const r = await api.invoke('hmd:fix-linux-input');
+    toast(r.message);
+  } catch (err) { toast(errMsg(err)); }
+  e.target.disabled = false;
+  e.target.textContent = 'Liberar agora';
 };
 
 // ---- atualização

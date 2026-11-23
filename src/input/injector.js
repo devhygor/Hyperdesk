@@ -46,8 +46,10 @@ class Injector {
     });
     this.proc.stderr.on('data', (d) => console.error('[injetor]', String(d).trim()));
     this.proc.stdin.on('error', () => {});
-    this.proc.on('exit', (code) => {
+    const proc = this.proc;
+    proc.on('exit', (code) => {
       console.error('[injetor] saiu com código', code);
+      if (this.proc !== proc) return; // já foi substituído por um novo (restart)
       this.proc = null;
       this.ready = false;
     });
@@ -96,6 +98,15 @@ class Injector {
   stop() {
     if (this.proc) { try { this.proc.kill(); } catch {} }
     this.proc = null;
+    this.ready = false;
+  }
+
+  // reabre o processo (ex.: depois de liberar o /dev/uinput no Linux)
+  restart() {
+    this.stop();
+    this.status = '';
+    this.lastStart = 0;
+    this.start();
   }
 }
 
