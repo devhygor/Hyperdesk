@@ -148,8 +148,9 @@ function startSenderStats() {
   clearInterval(statsTimer);
   statsCount = 0;
   statsTimer = setInterval(async () => {
-    if (!pc) return clearInterval(statsTimer);
-    const st = await pc.getStats();
+    if (!pc || !videoSender) return clearInterval(statsTimer);
+    // só a tela principal: as vagas extras do "Espalhar telas" também são vídeo
+    const st = await videoSender.getStats();
     let out = null, src = null;
     st.forEach((r) => {
       if (r.type === 'outbound-rtp' && r.kind === 'video') out = r;

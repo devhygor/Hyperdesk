@@ -141,6 +141,9 @@ function registerFail(ip) {
 
 // ---------------------------------------------------------------- servidor (este PC sendo controlado)
 const injector = new Injector();
+// último passo por onde o processo principal passou (o alarme de travamento mostra no log)
+let lastStep = '-';
+const step = (name) => { lastStep = `${name} às ${new Date().toISOString().slice(11, 19)}`; };
 let wss = null;
 let session = null; // { sid, ws, send, peer, ip, screens, current }
 let sessionSeq = 0; // cada sessão tem um número: sinais atrasados de uma sessão antiga são descartados
@@ -260,6 +263,7 @@ const VIRTUAL_RE = /virtual|vdd|idd|mtt|parsec|spacedesk|dummy/i;
 const MAX_EXTRAS = 3;
 
 async function listScreens() {
+  step('listar telas');
   const displays = screen.getAllDisplays();
   const primary = screen.getPrimaryDisplay();
   // No Linux não chamamos o desktopCapturer aqui: no Wayland cada chamada abre a janela do sistema
@@ -304,6 +308,7 @@ const publicScreens = () =>
     ({ sourceId, label, width, height, primary, all: !!all, virtual: !!virtual }));
 
 function startCapture(scr, first) {
+  step('iniciar captura');
   session.current = scr;
   const rs = session.screens.map((s) => s.rect);
   const x0 = Math.min(...rs.map((r) => r.x)), y0 = Math.min(...rs.map((r) => r.y));
@@ -373,6 +378,7 @@ function setupDisplayMediaHandler() {
 }
 
 function endSession() {
+  step('encerrar sessão');
   if (!session) return;
   hostWin?.webContents.send('hmd:host', { type: 'stop' });
   injector.releaseAll();
@@ -385,6 +391,7 @@ function endSession() {
 
 // ---- mensagens que chegam do PC controlador (via canal de dados do WebRTC)
 function handleInput(str) {
+  step('mouse/teclado');
   if (!session?.current) return;
   let m;
   try { m = JSON.parse(str); } catch { return; }
@@ -412,6 +419,7 @@ function handleInput(str) {
 }
 
 async function handleCtl(str) {
+  step('controle');
   if (!session) return;
   let m;
   try { m = JSON.parse(str); } catch { return; }
@@ -477,6 +485,7 @@ const sendCtlToViewer =(m) => hostWin?.webContents.send('hmd:host', { type: 'ctl
 let lastClip = '';
 let polling = false;
 async function setClipboardFromRemote(text) {
+  step('gravar área de transferência');
   if (text.length > 1_000_000) return;
   lastClip = text;
   try { await clipboard.writeText(text); } catch (e) { console.error('[área de transferência]', e.message); }
@@ -485,6 +494,7 @@ async function readClipboard() {
   try { return String((await clipboard.readText()) ?? ''); } catch { return lastClip; }
 }
 async function pollClipboard() {
+  step('ler área de transferência');
   if (polling) return; // a leitura anterior ainda não voltou
   polling = true;
   let t;
@@ -641,6 +651,7 @@ function openViewer(params) {
 }
 
 function showBanner() {
+  step('aviso no topo');
   hideBanner();
   const wa = screen.getPrimaryDisplay().workArea;
   const w = 420, h = 46;
@@ -667,6 +678,7 @@ function createTray() {
   updateTray();
 }
 function updateTray() {
+  step('ícone da bandeja');
   if (!tray) return;
   const status = session ? `${session.peer} está controlando este PC` :
     settings.allowIncoming ? `Código: ${access.code}` : 'Acesso desligado';
@@ -844,6 +856,15 @@ app.whenReady().then(() => {
   createMainWindow();
   createTray();
   setInterval(pollClipboard, 700);
+  // alarme de travamento: se o processo principal ficar parado (nada roda), registra quanto tempo
+  // e o que estava acontecendo, para achar a causa pelo log
+  let beat = Date.now();
+  setInterval(() => {
+    const gap = Date.now() - beat - 500;
+    if (gap > 1500) console.error(`[travou] o processo principal ficou parado ${(gap / 1000).toFixed(1)} s` +
+      ` (sessão: ${session ? session.peer : 'nenhuma'}, último passo: ${lastStep})`);
+    beat = Date.now();
+  }, 500);
   updater.start({
     changed: (u) => { mainWin?.webContents.send('hmd:update', u); updateTray(); },
     clicked: showMain,

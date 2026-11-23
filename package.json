@@ -1,7 +1,7 @@
 {
   "name": "hyperdesk",
   "productName": "Hyperdesk",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Acesso remoto moderno para os PCs da casa (tela + controle via WebRTC na rede local)",
   "main": "src/main.js",
   "private": true,
