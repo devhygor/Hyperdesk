@@ -93,6 +93,15 @@ curl -fsSL https://raw.githubusercontent.com/devhygor/Hyperdesk/main/install.sh 
    sudo modprobe uinput && sudo udevadm control --reload-rules && sudo udevadm trigger
    ```
 
+4. **Só no Ubuntu 23.10 ou mais novo:** libere a sandbox do app no AppArmor (sem isso ele fecha com o erro `SUID sandbox helper`):
+
+   ```bash
+   printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' 'profile hyperdesk /{tmp/.mount_Hyper*,tmp/appimage_extracted_*}/hyperdesk flags=(unconfined) {' '  userns,' '}' | sudo tee /etc/apparmor.d/hyperdesk
+   sudo apparmor_parser -r /etc/apparmor.d/hyperdesk
+   ```
+
+   Para isso funcionar, o arquivo precisa se chamar `Hyperdesk…AppImage` (o nome deve começar com "Hyper").
+
 **Alternativa em Ubuntu/Mint/Debian:** o pacote `.deb` (`sudo apt install ./Hyperdesk-x.y.z-amd64.deb`) não precisa de FUSE, mas não se atualiza sozinho: ele só avisa e abre a página de download.
 
 </details>
@@ -102,6 +111,14 @@ curl -fsSL https://raw.githubusercontent.com/devhygor/Hyperdesk/main/install.sh 
 - Se faltar a permissão de controle, o app mostra um **aviso amarelo** com o botão **Liberar agora**, que pede a senha numa janela do sistema e resolve sem terminal.
 - No **Wayland** (padrão no Ubuntu e no Fedora recentes), o sistema pede para escolher a tela a compartilhar **a cada conexão**. É uma regra de segurança do próprio Wayland. Para não ter essa pergunta, escolha a sessão **"Ubuntu em Xorg"** (ou "Xorg") na tela de login, na engrenagem do canto.
 - O som do Linux ainda não é transmitido (só a imagem).
+
+#### Problemas comuns no Linux
+
+| Mensagem | O que fazer |
+|---|---|
+| `error loading libfuse.so.2` | Rode o instalador de uma linha (ele instala o FUSE certo para a sua distro). |
+| `The SUID sandbox helper binary was found, but is not configured correctly` | Bloqueio do AppArmor do Ubuntu 23.10+. Rode o instalador de uma linha de novo: ele cria o perfil que libera o Hyperdesk. |
+| `!` amarelo ou `i` azul durante a instalação | São avisos, não erros. A instalação só falhou se aparecer `Erro:` em vermelho. |
 
 ## Usar
 

@@ -23,9 +23,11 @@ ICON="$HOME/.local/share/icons/hicolor/256x256/apps/hyperdesk.png"
 AUTOSTART="$HOME/.config/autostart/hyperdesk.desktop"
 UDEV_RULE="/etc/udev/rules.d/60-hyperdesk-uinput.rules"
 MODULES_CONF="/etc/modules-load.d/hyperdesk-uinput.conf"
+APPARMOR_PROFILE="/etc/apparmor.d/hyperdesk"
 
 say()  { printf '\n\033[1;34m==>\033[0m \033[1m%s\033[0m\n' "$*"; }
 ok()   { printf '    \033[1;32m✓\033[0m %s\n' "$*"; }
+info() { printf '    \033[1;36mi\033[0m %s\n' "$*"; }
 warn() { printf '    \033[1;33m!\033[0m %s\n' "$*"; }
 die()  { printf '\n\033[1;31mErro:\033[0m %s\n' "$*" >&2; exit 1; }
 
@@ -57,6 +59,11 @@ if [ "$REMOVE" = 1 ]; then
     need_root "remover a regra do uinput"
     $SUDO rm -f "$UDEV_RULE" "$MODULES_CONF"
     $SUDO udevadm control --reload-rules 2>/dev/null || true
+  fi
+  if [ -f "$APPARMOR_PROFILE" ]; then
+    need_root "remover o perfil do AppArmor"
+    $SUDO apparmor_parser -R "$APPARMOR_PROFILE" 2>/dev/null || true
+    $SUDO rm -f "$APPARMOR_PROFILE"
   fi
   ok "removido (as configurações ficam em ~/.config/Hyperdesk)"
   exit 0
@@ -163,6 +170,34 @@ if [ "$FUSE_OK" = 0 ]; then
   RUN="$APP --appimage-extract-and-run"
 fi
 
+# ------------------------------------------------------------------ AppArmor (Ubuntu 23.10+)
+# O Ubuntu bloqueia "user namespaces" para programas sem perfil do AppArmor. O Chromium (base do
+# Electron) usa isso como sandbox; sem ela, tenta a sandbox SUID, que no AppImage não funciona, e o
+# app fecha com "The SUID sandbox helper binary was found, but is not configured correctly".
+# Solução recomendada pelo Ubuntu: um perfil liberando userns só para o executável do Hyperdesk.
+if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = "1" ]; then
+  say "Ajustando a segurança do sistema (AppArmor)"
+  need_root "criar o perfil do AppArmor"
+  $SUDO tee "$APPARMOR_PROFILE" >/dev/null <<'EOF'
+# Hyperdesk (AppImage): libera user namespaces para a sandbox do Chromium funcionar.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile hyperdesk /{tmp/.mount_Hyper*,tmp/appimage_extracted_*}/hyperdesk flags=(unconfined) {
+  userns,
+
+  include if exists <local/hyperdesk>
+}
+EOF
+  if $SUDO apparmor_parser -r "$APPARMOR_PROFILE" 2>/dev/null; then
+    ok "perfil do AppArmor criado em $APPARMOR_PROFILE"
+  else
+    $SUDO rm -f "$APPARMOR_PROFILE"
+    warn "não consegui carregar o perfil do AppArmor; o Hyperdesk vai abrir com --no-sandbox"
+    RUN="$RUN --no-sandbox"
+  fi
+fi
+
 # ------------------------------------------------------------------ atalhos
 say "Criando atalhos"
 mkdir -p "$(dirname "$DESKTOP")" "$(dirname "$ICON")"
@@ -210,8 +245,8 @@ else
   fi
 fi
 if [ "$SESSION" = "wayland" ]; then
-  warn "no Wayland o sistema pede para escolher a tela a cada conexão (regra do próprio Wayland)."
-  warn "para não ter essa pergunta, escolha a sessão 'Xorg' na tela de login."
+  info "aviso (não é erro): no Wayland, a cada conexão este PC mostra uma janela para escolher a tela;"
+  info "alguém precisa clicar em Compartilhar aqui. Se a tela de login tiver a sessão Xorg, ela evita isso."
 fi
 
 # ------------------------------------------------------------------ firewall
