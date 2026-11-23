@@ -30,11 +30,15 @@ Get-Process Hyperdesk -ErrorAction SilentlyContinue | Stop-Process -Force
 # passa o trabalho para um segundo processo e sai logo: por isso esperamos o Hyperdesk.exe aparecer,
 # e não apagamos o arquivo de instalação enquanto ele ainda está em uso.
 $exe = Join-Path $env:LOCALAPPDATA 'Programs\hyperdesk\Hyperdesk.exe'
+$versao = $rel.tag_name.TrimStart('v')
+# numa atualização o .exe já existe: só vale quando ele estiver na versão nova
+function Test-Instalado { (Test-Path $exe) -and ((Get-Item $exe).VersionInfo.ProductVersion -like "$versao*") }
 $p = Start-Process $out -PassThru
 $p.WaitForExit()
 $limite = (Get-Date).AddMinutes(3)
-while (-not (Test-Path $exe) -and (Get-Date) -lt $limite) { Start-Sleep -Milliseconds 500 }
-if (-not (Test-Path $exe)) { throw "A instalação não terminou. Rode de novo ou abra $out com dois cliques." }
+while (-not (Test-Instalado) -and (Get-Date) -lt $limite) { Start-Sleep -Milliseconds 500 }
+if (-not (Test-Instalado)) { throw "A instalação não terminou. Rode de novo ou abra $out com dois cliques." }
+Start-Sleep 2 # o instalador ainda abre o app sozinho logo depois
 Ok 'instalado (atalho no menu Iniciar e na área de trabalho)'
 if (-not (Get-Process Hyperdesk -ErrorAction SilentlyContinue)) { Start-Process $exe }
 
