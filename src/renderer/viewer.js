@@ -153,6 +153,20 @@ async function onMsg(m) {
   }
 }
 
+// Tira o som do grupo de sincronia do vídeo. Com os dois no mesmo stream (msid), o WebRTC segura o
+// vídeo para ficar junto do som ("lip sync"); entre dois PCs os relógios de áudio derivam e esse
+// atraso foi crescendo até ~2,5 s no notebook. Num acesso remoto, o vídeo tem que sair na hora.
+// (Feito aqui no lado que recebe para valer também com o outro PC numa versão antiga.)
+function unsyncAudio(sdp) {
+  let inAudio = false;
+  return sdp.split('\r\n').map((l) => {
+    if (l.startsWith('m=')) inAudio = l.startsWith('m=audio');
+    if (!inAudio) return l;
+    if (l.startsWith('a=msid:')) return l.replace(/^a=msid:\S+/, 'a=msid:hmd-som');
+    return l.replace(/^(a=ssrc:\d+ msid:)\S+/, '$1hmd-som');
+  }).join('\r\n');
+}
+
 // a resposta pede ao outro lado para já começar com taxa alta (rede local aguenta)
 function boost(sdp) {
   let inVideo = false;
@@ -192,7 +206,7 @@ async function onOffer(sdp) {
     else if (s === 'disconnected') { $('#dot').className = 'dot'; }
     else if (s === 'failed') fail('A conexão de vídeo caiu.');
   };
-  await pc.setRemoteDescription({ type: 'offer', sdp });
+  await pc.setRemoteDescription({ type: 'offer', sdp: unsyncAudio(sdp) });
   const ans = await pc.createAnswer();
   ans.sdp = boost(ans.sdp);
   await pc.setLocalDescription(ans);

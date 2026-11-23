@@ -121,7 +121,8 @@ async function start({ sourceId, width, height, audio, extras: nExtras = 0, sid:
   videoSender = vtr.sender;
   preferH264(vtr);
   const at = stream.getAudioTracks()[0];
-  if (at) pc.addTransceiver(at, { direction: 'sendonly', streams: [stream] });
+  // som num stream próprio: no mesmo stream do vídeo o WebRTC atrasa o vídeo para sincronizar com ele
+  if (at) pc.addTransceiver(at, { direction: 'sendonly', streams: [new MediaStream([at])] });
   for (let k = 0; k < nExtras; k++) {
     const tr = pc.addTransceiver('video', { direction: 'sendonly', streams: [new MediaStream()] });
     preferH264(tr);
