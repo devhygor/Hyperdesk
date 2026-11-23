@@ -25,12 +25,18 @@ Ok $out
 
 Say 'Instalando'
 Get-Process Hyperdesk -ErrorAction SilentlyContinue | Stop-Process -Force
-# não usar Start-Process -Wait: ele espera também os processos filhos, e o instalador abre o
-# Hyperdesk no final (o script ficaria preso até fechar o app)
+# Não usar Start-Process -Wait: ele espera também os processos filhos, e o instalador abre o
+# Hyperdesk no final (o script ficaria preso até fechar o app). E o instalador do electron-builder
+# passa o trabalho para um segundo processo e sai logo: por isso esperamos o Hyperdesk.exe aparecer,
+# e não apagamos o arquivo de instalação enquanto ele ainda está em uso.
+$exe = Join-Path $env:LOCALAPPDATA 'Programs\hyperdesk\Hyperdesk.exe'
 $p = Start-Process $out -PassThru
 $p.WaitForExit()
-Remove-Item $out -ErrorAction SilentlyContinue
+$limite = (Get-Date).AddMinutes(3)
+while (-not (Test-Path $exe) -and (Get-Date) -lt $limite) { Start-Sleep -Milliseconds 500 }
+if (-not (Test-Path $exe)) { throw "A instalação não terminou. Rode de novo ou abra $out com dois cliques." }
 Ok 'instalado (atalho no menu Iniciar e na área de trabalho)'
+if (-not (Get-Process Hyperdesk -ErrorAction SilentlyContinue)) { Start-Process $exe }
 
 Write-Host "`nNa primeira vez que o Hyperdesk abrir, o Windows pergunta sobre o firewall:" -ForegroundColor Yellow
 Write-Host "marque 'Redes privadas' e clique em 'Permitir acesso'." -ForegroundColor Yellow
