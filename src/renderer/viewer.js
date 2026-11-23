@@ -241,9 +241,18 @@ $('#audio').onclick = (e) => {
   e.target.textContent = video.muted ? 'Som: mudo' : 'Som: ligado';
   e.target.blur();
 };
+// Seta local ligada por padrão: ela anda na hora. A seta do outro PC vem dentro do vídeo e chega
+// sempre com o atraso da transmissão inteira, e é isso que mais dá a sensação de "lag".
+function setLocalCursor(on) {
+  document.body.classList.toggle('local-cursor', on);
+  $('#cursor').textContent = on ? 'Seta local: sim' : 'Seta local: não';
+  try { localStorage.setItem('hmd-local-cursor', on ? '1' : '0'); } catch {}
+}
+let savedCursor = null;
+try { savedCursor = localStorage.getItem('hmd-local-cursor'); } catch {}
+setLocalCursor(savedCursor !== '0');
 $('#cursor').onclick = (e) => {
-  const on = document.body.classList.toggle('local-cursor');
-  e.target.textContent = on ? 'Seta local: sim' : 'Seta local: não';
+  setLocalCursor(!document.body.classList.contains('local-cursor'));
   e.target.blur();
 };
 $('#fs').onclick = async (e) => { await api.invoke('hmd:viewer-fullscreen'); e.target.blur(); };
@@ -352,27 +361,50 @@ function releaseAll() {
 window.addEventListener('blur', releaseAll);
 
 // ---------------------------------------------------------------- estatísticas
-let lastBytes = 0, lastTs = 0;
+// Mostra na barra (e grava no log) quanto atraso cada parte põe: a espera do buffer de vídeo,
+// a decodificação neste PC e a rede. Assim dá para saber de onde vem o "lag".
+let prev = null;
+let statsTick = 0;
+let lastLogged = 0;
 function startStats() {
   setInterval(async () => {
     if (!pc) return;
     const st = await pc.getStats();
-    let fps = 0, bytes = 0, ts = 0, w = 0, h = 0, rtt = null, codecId = null, codec = '';
+    let v = null, rtt = null;
     const codecs = {};
     st.forEach((r) => {
-      if (r.type === 'inbound-rtp' && r.kind === 'video') {
-        fps = r.framesPerSecond || 0; bytes = r.bytesReceived; ts = r.timestamp;
-        w = r.frameWidth; h = r.frameHeight; codecId = r.codecId;
-      }
+      if (r.type === 'inbound-rtp' && r.kind === 'video') v = r;
       if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') rtt = r.currentRoundTripTime;
       if (r.type === 'codec') codecs[r.id] = r.mimeType;
     });
-    if (codecId && codecs[codecId]) codec = codecs[codecId].split('/')[1];
-    const mbps = lastTs && ts > lastTs ? ((bytes - lastBytes) * 8) / ((ts - lastTs) / 1000) / 1e6 : 0;
-    lastBytes = bytes; lastTs = ts;
-    const txt = `${w}×${h} · ${Math.round(fps)} fps · ${mbps.toFixed(1)} Mb/s${rtt != null ? ` · ${Math.round(rtt * 1000)} ms` : ''}${codec ? ` · ${codec}` : ''}`;
-    $('#stats').textContent = txt;
-    if (params.statsLog) api.send('hmd:log', txt);
+    if (!v) return;
+    const codec = (codecs[v.codecId] || '').split('/')[1] || '';
+    const d = (k) => (v[k] || 0) - (prev?.[k] || 0);
+    const dt = prev ? (v.timestamp - prev.timestamp) / 1000 : 0;
+    const mbps = dt > 0 ? (d('bytesReceived') * 8) / dt / 1e6 : 0;
+    const emitted = d('jitterBufferEmittedCount');
+    const bufferMs = emitted > 0 ? (d('jitterBufferDelay') / emitted) * 1000 : 0;
+    const decoded = d('framesDecoded');
+    const decodeMs = decoded > 0 ? (d('totalDecodeTime') / decoded) * 1000 : 0;
+    const dropped = d('framesDropped');
+    const netMs = rtt != null ? (rtt * 1000) / 2 : 0;
+    const delay = Math.round(bufferMs + decodeMs + netMs);
+    prev = v;
+    if (!dt) return;
+    const fps = Math.round(v.framesPerSecond || 0);
+    $('#stats').textContent = `${v.frameWidth}×${v.frameHeight} · ${fps} fps · ${mbps.toFixed(1)} Mb/s · atraso ~${delay} ms${codec ? ` · ${codec}` : ''}`;
+    $('#stats').title = `buffer ${Math.round(bufferMs)} ms · decodificar ${decodeMs.toFixed(1)} ms · rede ${Math.round(netMs)} ms` +
+      ` · decodificador: ${v.decoderImplementation || '?'}${v.powerEfficientDecoder ? ' (placa de vídeo)' : ''}`;
+    // no log: as 5 primeiras medições e, depois, a cada 30 s quando estiver ruim
+    statsTick++;
+    const bad = delay > 60 || fps < 45 || dropped > 2;
+    const now = Date.now();
+    if (params.statsLog || statsTick <= 5 || (bad && now - lastLogged > 30_000)) {
+      lastLogged = now;
+      api.send('hmd:log', `recebendo: ${v.frameWidth}x${v.frameHeight} ${fps} fps ${mbps.toFixed(1)} Mb/s · atraso ~${delay} ms ` +
+        `(buffer ${Math.round(bufferMs)}, decodificar ${decodeMs.toFixed(1)}, rede ${Math.round(netMs)}) · perdidos ${dropped} ` +
+        `· decodificador ${v.decoderImplementation || '?'}${v.powerEfficientDecoder ? ' (hardware)' : ''}`);
+    }
   }, 1000);
 }
 
