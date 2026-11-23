@@ -25,7 +25,10 @@ Ok $out
 
 Say 'Instalando'
 Get-Process Hyperdesk -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Process $out -Wait
+# não usar Start-Process -Wait: ele espera também os processos filhos, e o instalador abre o
+# Hyperdesk no final (o script ficaria preso até fechar o app)
+$p = Start-Process $out -PassThru
+$p.WaitForExit()
 Remove-Item $out -ErrorAction SilentlyContinue
 Ok 'instalado (atalho no menu Iniciar e na área de trabalho)'
 
