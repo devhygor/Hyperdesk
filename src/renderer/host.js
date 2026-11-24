@@ -30,7 +30,7 @@ async function capture(sourceId, width, height, audio, slot = 0) {
     });
     const t = s.getVideoTracks()[0];
     const st = t?.getSettings() || {};
-    api.send('hmd:host-captured', { width: st.width || 0, height: st.height || 0, label: t?.label || '', slot });
+    api.send('hmd:host-captured', { width: st.width || 0, height: st.height || 0, label: t?.label || '', slot, sourceId });
     api.send('hmd:log', `captura: ${st.width}x${st.height} a ${Math.round(st.frameRate || 0)} fps, som: ${s.getAudioTracks().length ? 'sim' : 'não'}`);
     return s;
   } catch (e) {

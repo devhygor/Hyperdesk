@@ -235,7 +235,7 @@ function startServer() {
         }
         const first = session.screens.find((s) => s.primary) || session.screens[0];
         if (!first) { send({ type: 'error', reason: 'noscreen' }); return ws.close(); }
-        send({ type: 'auth-ok', via, screens: publicScreens(), current: first.sourceId });
+        send({ type: 'auth-ok', via, screens: publicScreens(), current: first.sourceId, canVirtual: CAN_VIRTUAL });
         startCapture(first, true);
         showBanner();
         pushState();
@@ -278,7 +278,7 @@ async function listScreens() {
       ? screen.dipToScreenRect(null, d.bounds)
       : { x: Math.round(d.bounds.x * d.scaleFactor), y: Math.round(d.bounds.y * d.scaleFactor),
           width: Math.round(d.bounds.width * d.scaleFactor), height: Math.round(d.bounds.height * d.scaleFactor) };
-    const virtual = VIRTUAL_RE.test(d.label || '');
+    const virtual = VIRTUAL_RE.test(d.label || '') || d.id === vdisp.displayId;
     return {
       sourceId: s.id,
       label: `Tela ${i + 1}${d.id === primary.id ? ' (principal)' : ''}${virtual ? ' (monitor virtual)' : ''}`,
@@ -307,23 +307,29 @@ const publicScreens = () =>
   (session?.screens || []).map(({ sourceId, label, width, height, primary, all, virtual }) =>
     ({ sourceId, label, width, height, primary, all: !!all, virtual: !!virtual }));
 
-function startCapture(scr, first) {
-  step('iniciar captura');
-  session.current = scr;
+function updateLayout() {
   const rs = session.screens.map((s) => s.rect);
+  if (!rs.length) return;
   const x0 = Math.min(...rs.map((r) => r.x)), y0 = Math.min(...rs.map((r) => r.y));
   injector.layout({
     x: x0, y: y0,
     width: Math.max(...rs.map((r) => r.x + r.width)) - x0,
     height: Math.max(...rs.map((r) => r.y + r.height)) - y0,
   });
+}
+
+function startCapture(scr, first) {
+  step('iniciar captura');
+  session.current = scr;
+  updateLayout();
   const msg = {
     type: first ? 'start' : 'switch',
     sid: session.sid,
     sourceId: scr.sourceId, width: scr.width, height: scr.height,
     audio: !IS_LINUX && first, // som do sistema só no Windows (e só na primeira captura)
     // vagas de vídeo extras para o "Espalhar telas" (ficam vazias até o outro lado pedir)
-    extras: Math.min(session.screens.filter((s) => !s.all).length - 1, MAX_EXTRAS),
+    // (no GNOME sempre pelo menos uma: a tela virtual pode ser criada no meio da sessão)
+    extras: Math.min(Math.max(session.screens.filter((s) => !s.all).length - 1, CAN_VIRTUAL ? 1 : 0), MAX_EXTRAS),
   };
   // A captura usa getDisplayMedia nos dois sistemas: o setDisplayMediaRequestHandler abaixo entrega
   // a tela pedida. É disparada com "gesto do usuário" porque a janela é invisível.
@@ -335,11 +341,13 @@ function startCapture(scr, first) {
 
 // Linux: o portal decide qual tela é capturada. Descobrimos qual é pelo tamanho do vídeo,
 // para o mouse cair no lugar certo.
-function onCaptured({ width, height, label, slot }) {
+function onCaptured({ width, height, label, slot, sourceId }) {
   if (!session || !width || !height) return;
   console.log(`[servidor] capturando ${width}x${height} ${label || ''}${slot ? ` (vaga extra ${slot})` : ''}`);
   if (!IS_LINUX) return; // no Windows a tela é exatamente a pedida
-  const match = session.screens.find((s) => s.width === width && s.height === height)
+  // várias telas do mesmo tamanho (ex.: a tela virtual igual à de verdade): fica com a pedida
+  const same = session.screens.filter((s) => !s.all && s.width === width && s.height === height);
+  const match = same.find((s) => s.sourceId === sourceId) || same[0]
     || session.screens.find((s) => Math.abs(s.width / s.height - width / height) < 0.01)
     || (slot ? null : session.current);
   if (slot) {
@@ -377,6 +385,71 @@ function setupDisplayMediaHandler() {
   });
 }
 
+// ---- tela virtual (Linux com GNOME/Wayland): um monitor a mais, criado pelo src/input/virtual_display.py
+// pela API do próprio GNOME. Existe enquanto o script estiver aberto; some quando a sessão acaba.
+const CAN_VIRTUAL = IS_LINUX && process.env.XDG_SESSION_TYPE === 'wayland'
+  && /gnome/i.test(process.env.XDG_CURRENT_DESKTOP || '');
+const vdisp = { proc: null, displayId: null, before: null };
+function startVirtualDisplay(width, height) {
+  step('criar tela virtual');
+  if (!CAN_VIRTUAL) return Promise.resolve({ ok: false, error: 'só funciona no Linux com GNOME (Wayland)' });
+  if (vdisp.proc) return Promise.resolve({ ok: true });
+  const w = Math.min(Math.max(width | 0, 640), 7680), h = Math.min(Math.max(height | 0, 480), 4320);
+  const { spawn } = require('child_process');
+  const file = path.join(__dirname, 'input', 'virtual_display.py').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+  vdisp.before = new Set(screen.getAllDisplays().map((d) => d.id));
+  const proc = spawn('python3', ['-u', file, String(w), String(h)], { stdio: ['pipe', 'pipe', 'pipe'] });
+  vdisp.proc = proc;
+  console.log(`[tela virtual] criando ${w}x${h}`);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (r) => { if (!done) { done = true; resolve(r); } };
+    proc.stdout.on('data', (d) => {
+      const out = String(d);
+      if (/^ready/m.test(out)) { console.log('[tela virtual] pronta'); finish({ ok: true }); }
+      const e = out.match(/^error (.*)$/m);
+      if (e) { console.error('[tela virtual]', e[1]); finish({ ok: false, error: e[1] }); stopVirtualDisplay(); }
+    });
+    proc.stderr.on('data', (d) => console.error('[tela virtual]', String(d).trim()));
+    proc.on('error', (e) => { finish({ ok: false, error: `python3 não abriu: ${e.message}` }); });
+    proc.on('exit', (code) => {
+      if (vdisp.proc === proc) { vdisp.proc = null; vdisp.displayId = null; }
+      console.log('[tela virtual] encerrada', code ?? '');
+      finish({ ok: false, error: `o script saiu (código ${code})` });
+    });
+    setTimeout(() => finish({ ok: false, error: 'a tela virtual não ficou pronta em 25 s' }), 25_000);
+  });
+}
+function stopVirtualDisplay() {
+  const proc = vdisp.proc;
+  if (!proc) return;
+  vdisp.proc = null;
+  vdisp.displayId = null;
+  try { proc.stdin.write('quit\n'); } catch {}
+  setTimeout(() => { try { proc.kill(); } catch {} }, 2000);
+}
+
+// telas apareceram/sumiram (tela virtual, monitor plugado): atualiza a lista da sessão e o mouse
+let displaysTimer = null;
+function onDisplaysChanged() {
+  clearTimeout(displaysTimer);
+  displaysTimer = setTimeout(async () => {
+    step('telas mudaram');
+    if (vdisp.proc && !vdisp.displayId && vdisp.before) {
+      const nova = screen.getAllDisplays().find((d) => !vdisp.before.has(d.id));
+      if (nova) vdisp.displayId = nova.id;
+    }
+    if (!session) return;
+    session.screens = await listScreens().catch(() => session.screens);
+    if (!session) return;
+    session.current = session.screens.find((x) => x.sourceId === session.current?.sourceId)
+      || session.screens.find((x) => x.primary) || session.screens[0];
+    updateLayout();
+    console.log('[servidor] telas agora:', session.screens.map((x) => x.label).join(', '));
+    sendCtlToViewer({ t: 'screens', screens: publicScreens(), current: session.current?.sourceId, canVirtual: CAN_VIRTUAL });
+  }, 600);
+}
+
 function endSession() {
   step('encerrar sessão');
   if (!session) return;
@@ -384,6 +457,7 @@ function endSession() {
   injector.releaseAll();
   try { session.ws.close(); } catch {}
   session = null;
+  stopVirtualDisplay();
   hideBanner();
   newCode(); // código novo a cada sessão
   pushState();
@@ -431,6 +505,11 @@ async function handleCtl(str) {
       startCapture(scr, false);
       sendCtlToViewer({ t: 'screens', screens: publicScreens(), current: scr.sourceId });
     }
+  } else if (m.t === 'virtual') {
+    if (!m.on) { stopVirtualDisplay(); return; }
+    const r = await startVirtualDisplay(m.width || 1920, m.height || 1080);
+    sendCtlToViewer({ t: 'virtual', ok: r.ok, error: r.error });
+    if (r.ok) onDisplaysChanged();
   } else if (m.t === 'extra') {
     const slot = m.slot | 0;
     if (slot < 1 || slot > MAX_EXTRAS) return;
@@ -840,7 +919,7 @@ function registerIpc() {
 // ---------------------------------------------------------------- inicialização
 app.on('second-instance', showMain);
 app.on('window-all-closed', (e) => e.preventDefault?.());
-app.on('before-quit', () => { app.isQuitting = true; injector.stop(); });
+app.on('before-quit', () => { app.isQuitting = true; injector.stop(); stopVirtualDisplay(); });
 
 app.whenReady().then(() => {
   if (!gotLock) return;
@@ -855,6 +934,7 @@ app.whenReady().then(() => {
   createHostWindow();
   createMainWindow();
   createTray();
+  for (const ev of ['display-added', 'display-removed', 'display-metrics-changed']) screen.on(ev, onDisplaysChanged);
   setInterval(pollClipboard, 700);
   // alarme de travamento: se o processo principal ficar parado (nada roda), registra quanto tempo
   // e o que estava acontecendo, para achar a causa pelo log

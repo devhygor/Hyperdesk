@@ -138,6 +138,7 @@ async function onMsg(m) {
         api.invoke('hmd:save-key', hostInfo.hostId, hostInfo.salt, hex(pendingKey), hostInfo.hostName);
       }
       api.invoke('hmd:viewer-connected', { hostId: hostInfo.hostId, hostName: hostInfo.hostName });
+      remoteCanVirtual = !!m.canVirtual;
       fillScreens(m.screens, m.current);
       status('Abrindo a tela…');
       break;
@@ -230,7 +231,17 @@ function onCtl(e) {
   let m;
   try { m = JSON.parse(e.data); } catch { return; }
   if (m.t === 'clip' && typeof m.text === 'string') api.send('hmd:viewer-clip', m.text);
-  if (m.t === 'screens') fillScreens(m.screens, m.current);
+  if (m.t === 'screens') {
+    if ('canVirtual' in m) remoteCanVirtual = !!m.canVirtual;
+    fillScreens(m.screens, m.current);
+    // a segunda tela pedida ao outro PC apareceu: espalha agora
+    if (waitingVirtual && realScreens().length > 1) { waitingVirtual = false; clearTimeout(virtualTimer); toggleSpread(); }
+  }
+  if (m.t === 'virtual' && m.ok === false) {
+    waitingVirtual = false;
+    clearTimeout(virtualTimer);
+    spreadNote(`Não deu para criar a 2ª tela no outro PC: ${m.error || 'erro desconhecido'}`);
+  }
   // Linux: a pessoa pode escolher outra tela no portal; o outro lado avisa qual ficou em cada vaga
   if (m.t === 'extra-screen') { const x = extraWins.get(m.slot); if (x) x.sourceId = m.sourceId; }
 }
@@ -397,11 +408,23 @@ var extraWins = new Map();     // (var: a seta local consulta antes desta linha)
 let localDisplays = { displays: [], mine: null };
 
 const realScreens = () => screensList.filter((s) => !s.all);
+// O outro PC pode ter uma tela só, mas saber criar uma segunda de mentira (Linux com GNOME):
+// aí "Espalhar telas" pede a tela virtual, espera ela aparecer na lista e espalha.
+let remoteCanVirtual = false;
+let waitingVirtual = false;
+let virtualTimer = null;
+let askedVirtual = false; // fomos nós que pedimos a tela virtual (ao juntar, pedimos para tirar)
+function spreadNote(text) {
+  $('#spread').title = text;
+  $('#stats').textContent = text;
+  flashBar();
+}
 async function refreshSpreadButton() {
   try { localDisplays = await api.invoke('hmd:viewer-displays'); } catch {}
-  const can = realScreens().length > 1 && localDisplays.displays.length > 1 && extraTracks.size > 0;
+  const remoteOk = realScreens().length > 1 || remoteCanVirtual;
+  const can = remoteOk && localDisplays.displays.length > 1 && extraTracks.size > 0;
   $('#spread').classList.toggle('hidden', !can && !extraWins.size);
-  $('#spread').textContent = extraWins.size ? 'Juntar telas' : 'Espalhar telas';
+  $('#spread').textContent = extraWins.size ? 'Juntar telas' : waitingVirtual ? 'Criando a 2ª tela…' : 'Espalhar telas';
 }
 
 function openExtra(slot, sourceId, display) {
@@ -436,8 +459,24 @@ function openExtra(slot, sourceId, display) {
 
 async function toggleSpread() {
   if (extraWins.size) return closeExtras();
+  if (waitingVirtual) return;
   await refreshSpreadButton();
   const others = localDisplays.displays.filter((d) => d.id !== localDisplays.mine);
+  if (realScreens().length < 2 && remoteCanVirtual && others.length) {
+    // pede a segunda tela do tamanho do meu outro monitor
+    waitingVirtual = true;
+    askedVirtual = true;
+    sendCtl({ t: 'virtual', on: true, width: others[0].bounds.width, height: others[0].bounds.height });
+    spreadNote('Criando a segunda tela no outro PC… (lá pode aparecer a janela do sistema para escolher a tela)');
+    virtualTimer = setTimeout(() => {
+      if (!waitingVirtual) return;
+      waitingVirtual = false;
+      spreadNote('A segunda tela não apareceu no outro PC.');
+      refreshSpreadButton();
+    }, 25_000);
+    refreshSpreadButton();
+    return;
+  }
   const remote = realScreens().filter((s) => s.sourceId !== currentScreen);
   const n = Math.min(others.length, remote.length, extraTracks.size);
   if (!n) return;
@@ -451,6 +490,7 @@ function closeExtras() {
     sendCtl({ t: 'extra', slot, sourceId: null });
     try { win.close(); } catch {}
   }
+  if (askedVirtual) { askedVirtual = false; sendCtl({ t: 'virtual', on: false }); }
   refreshSpreadButton();
 }
 window.addEventListener('beforeunload', () => { for (const { win } of extraWins.values()) try { win.close(); } catch {} });

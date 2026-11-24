@@ -138,7 +138,8 @@ A **seta local** vem ligada: a seta deste PC aparece por cima da imagem e anda s
 
 - **Espalhar telas** (`Ctrl+Alt+E`): se o outro PC tem duas telas ou mais e este PC também, cada tela do outro PC abre em tela cheia num monitor deste. O mouse passa de um monitor para o outro como se fosse um PC só. Clique em **Juntar telas** para voltar.
 - **Todas as telas**: na lista de telas, mostra todos os monitores do outro PC juntos numa imagem só (para quem controla de um notebook com uma tela). Só quando o PC controlado é Windows, e fica em torno de 30 fps.
-- **Monitor virtual**: com um driver de monitor virtual no PC controlado (no Windows, o [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)), a tela de mentira aparece como mais uma tela, marcada "(monitor virtual)", e funciona com as opções acima.
+- **Segunda tela no notebook Linux** (GNOME no Wayland, ex.: Ubuntu): se o notebook tem uma tela só e este PC tem duas, **Espalhar telas** pede ao notebook para criar uma segunda tela virtual, do tamanho do seu outro monitor. Ela aparece nas configurações de tela do GNOME como um monitor a mais. No notebook, a janela do sistema pede para escolher a tela compartilhada: escolha a nova (você pode clicar nela pela própria imagem). A tela some quando você clica em **Juntar telas** ou desconecta. Precisa de `python3-gi`, `gir1.2-gstreamer-1.0` e `gstreamer1.0-pipewire` (o instalador já instala).
+- **Monitor virtual no Windows**: com um driver de monitor virtual no PC controlado (no Windows, o [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver)), a tela de mentira aparece como mais uma tela, marcada "(monitor virtual)", e funciona com as opções acima.
 
 O texto copiado num PC vai sozinho para a área de transferência do outro.
 
@@ -205,7 +206,6 @@ Para gerar localmente: `npm run dist:win` ou `npm run dist:linux` (o build do Li
 
 ## Próximos passos
 
-- **Monitor virtual no Linux**: criar uma segunda tela de mentira no notebook (GNOME/Wayland) para o "Espalhar telas" mostrar duas telas dele nos dois monitores do PC.
 - Rodar como serviço (tela de login/UAC), transferência de arquivos, mais de um controlador ao mesmo tempo.
 
 ## Licença

@@ -4,7 +4,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/devhygor/Hyperdesk/main/install.sh | bash
 #
 # O que ele faz (pede a senha do sudo só para os passos do sistema):
-#   1. descobre a distribuição e instala o que falta (FUSE 2 para o AppImage, python3, libXtst);
+#   1. descobre a distribuição e instala o que falta (FUSE 2 para o AppImage, python3, libXtst e,
+#      no GNOME, o GStreamer com PipeWire para a segunda tela virtual);
 #   2. baixa a última versão (AppImage, que se atualiza sozinho) para ~/.local/share/hyperdesk;
 #   3. cria o atalho no menu de aplicativos e o comando "hyperdesk";
 #   4. libera o teclado/mouse virtual (/dev/uinput) para os outros PCs controlarem este no Wayland;
@@ -130,6 +131,19 @@ case "$PM" in
     command -v python3 >/dev/null 2>&1 || PKGS+=(python)
     ;;
 esac
+
+# Segunda tela virtual (GNOME no Wayland): o app usa GStreamer + PipeWire pelo Python
+gst_ok() {
+  python3 -c "import gi; gi.require_version('Gst','1.0'); from gi.repository import Gst; Gst.init(None); assert Gst.ElementFactory.find('pipewiresrc')" >/dev/null 2>&1
+}
+if echo "${XDG_CURRENT_DESKTOP:-}" | grep -qi gnome && ! gst_ok; then
+  case "$PM" in
+    apt-get) PKGS+=(python3-gi gir1.2-gstreamer-1.0 gstreamer1.0-pipewire) ;;
+    dnf)     PKGS+=(python3-gobject gstreamer1 pipewire-gstreamer) ;;
+    zypper)  PKGS+=(python3-gobject typelib-1_0-Gst-1_0 gstreamer-plugin-pipewire) ;;
+    pacman)  PKGS+=(python-gobject gstreamer gst-plugin-pipewire) ;;
+  esac
+fi
 
 if [ "${#PKGS[@]}" -gt 0 ]; then
   need_root "instalar ${PKGS[*]}"
