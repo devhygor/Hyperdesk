@@ -594,28 +594,54 @@ const sendCtlToViewer =(m) => hostWin?.webContents.send('hmd:host', { type: 'ctl
 // ---------------------------------------------------------------- área de transferência (texto, nos dois sentidos)
 // No Electron 44 o clipboard do processo principal ficou assíncrono (readText/writeText devolvem
 // Promise); com await funciona também nas versões antigas, que devolviam o valor direto.
+//
+// Evita o laço "a cópia daqui volta a ser a de lá": se o outro PC não conseguir gravar o que
+// mandamos (no Wayland, um app sem foco não grava), ele relê o texto antigo e o devolve. Por isso:
+// - depois de gravar, relemos e guardamos o que ficou de fato (gravação falha não vira "cópia nova");
+// - um texto remoto igual ao último recebido, logo depois de uma cópia local, é eco e é ignorado;
+// - leitura e gravação passam pela mesma fila, para o polling não ler no meio de uma gravação.
 let lastClip = '';
+let lastRemoteClip = null;
+let lastLocalSentAt = 0;
+let clipBeforeLocal = null;
+let clipQueue = Promise.resolve();
 let polling = false;
-async function setClipboardFromRemote(text) {
-  step('gravar área de transferência');
+const ECHO_WINDOW_MS = 5000;
+const clipTask = (fn) => (clipQueue = clipQueue.then(fn, fn));
+
+function setClipboardFromRemote(text) {
   if (text.length > 1_000_000) return;
-  lastClip = text;
-  try { await clipboard.writeText(text); } catch (e) { console.error('[área de transferência]', e.message); }
+  return clipTask(async () => {
+    step('gravar área de transferência');
+    // eco: logo depois de uma cópia local, o outro lado devolve o texto que já tinha (o último que
+    // recebemos dele, ou o que estava aqui antes da cópia)
+    const isEcho = text !== lastClip && Date.now() - lastLocalSentAt < ECHO_WINDOW_MS
+      && (text === lastRemoteClip || text === clipBeforeLocal);
+    lastRemoteClip = text;
+    if (isEcho) { console.log('[área de transferência] eco do outro PC ignorado'); return; }
+    if (text === lastClip) return;
+    try { await clipboard.writeText(text); } catch (e) { console.error('[área de transferência]', e.message); }
+    lastClip = await readClipboard();
+    if (lastClip !== text) console.warn('[área de transferência] não consegui gravar o texto recebido');
+  });
 }
 async function readClipboard() {
   try { return String((await clipboard.readText()) ?? ''); } catch { return lastClip; }
 }
-async function pollClipboard() {
-  step('ler área de transferência');
+function pollClipboard() {
   if (polling) return; // a leitura anterior ainda não voltou
   polling = true;
-  let t;
-  try { t = await readClipboard(); } finally { polling = false; }
-  if (t === lastClip) return;
-  lastClip = t;
-  if (!t || t.length > 1_000_000) return;
-  if (session) sendCtlToViewer({ t: 'clip', text: t });
-  for (const w of viewerWins.keys()) if (!w.isDestroyed()) w.webContents.send('hmd:clip-local', t);
+  clipTask(async () => {
+    step('ler área de transferência');
+    const t = await readClipboard();
+    if (t === lastClip) return;
+    clipBeforeLocal = lastClip;
+    lastClip = t;
+    if (!t || t.length > 1_000_000) return;
+    lastLocalSentAt = Date.now();
+    if (session) sendCtlToViewer({ t: 'clip', text: t });
+    for (const w of viewerWins.keys()) if (!w.isDestroyed()) w.webContents.send('hmd:clip-local', t);
+  }).finally(() => { polling = false; });
 }
 
 // ---------------------------------------------------------------- descoberta na rede local
