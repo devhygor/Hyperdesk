@@ -8,3 +8,5 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 button { -webkit-app-region: no-drag; font: inherit; color: #fecaca; background: rgba(248, 113, 113, .18);
   border: 1px solid rgba(248, 113, 113, .4); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
 button:hover { background: rgba(248, 113, 113, .3); }
+button.x { padding: 5px 9px; color: #8c93a8; background: transparent; border-color: transparent; }
+button.x:hover { color: #e8ebf3; background: rgba(255, 255, 255, .08); }

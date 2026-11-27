@@ -75,6 +75,7 @@ function loadSettings() {
   settings.deviceId ||= crypto.randomUUID();
   settings.salt ||= crypto.randomBytes(16).toString('hex');
   settings.allowIncoming ??= true;
+  settings.showBanner ??= true; // faixa "Fulano está controlando este PC" no topo da tela
   settings.savedKeys ||= {};
   settings.recent ||= [];
   saveSettings();
@@ -366,10 +367,41 @@ function onCaptured({ width, height, label, slot, sourceId }) {
 // O caminho antigo (getUserMedia + chromeMediaSourceId) ficava preso em ~38 fps no Electron 44 e
 // derrubava o app no Wayland.
 let pendingCapture = null;
+
+// Linux (Wayland): a janela do sistema para escolher a tela aparece no desktopCapturer.getSources.
+// O Chromium guarda uma "chave de reabertura" do portal para a tela escolhida (enquanto o app estiver
+// aberto): se pedirmos de novo a MESMA fonte, sem chamar getSources, a captura volta direto, sem
+// perguntar. Por isso guardamos a fonte escolhida para cada tela pedida (a principal e a virtual) e
+// só abrimos a janela do sistema na primeira vez, ou se a fonte guardada parar de funcionar.
+const linuxSources = new Map(); // tela pedida (display:<id>) -> fonte escolhida no portal { id, name }
+function linuxPick(callback) {
+  const key = pendingCapture?.sourceId || 'principal';
+  const saved = linuxSources.get(key);
+  if (saved) {
+    console.log(`[servidor] reabrindo a tela escolhida antes (${saved.name || saved.id}), sem perguntar`);
+    linuxPending = { key, reused: true };
+    return callback({ video: saved });
+  }
+  desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } }).then((sources) => {
+    const src = sources[0];
+    if (!src) return callback({});
+    linuxSources.set(key, { id: src.id, name: src.name });
+    linuxPending = { key, reused: false };
+    callback({ video: src });
+  }).catch((e) => { console.error('[servidor] portal:', e.message); callback({}); });
+}
+// se a fonte guardada falhar (o sistema esqueceu a permissão), a próxima vez pergunta de novo
+let linuxPending = null;
+function linuxCaptureFailed() {
+  if (linuxPending) linuxSources.delete(linuxPending.key);
+  linuxPending = null;
+}
+
 function setupDisplayMediaHandler() {
   const { session: electronSession } = require('electron');
   electronSession.defaultSession.setDisplayMediaRequestHandler(async (_req, callback) => {
     try {
+      if (IS_LINUX) return linuxPick(callback);
       const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
       const wanted = IS_LINUX ? sources[0]
         : pendingCapture?.sourceId === ALL_SCREENS ? { id: ALL_SCREENS, name: 'Todas as telas' }
@@ -457,6 +489,7 @@ function endSession() {
   injector.releaseAll();
   try { session.ws.close(); } catch {}
   session = null;
+  bannerHidden = false;
   stopVirtualDisplay();
   hideBanner();
   newCode(); // código novo a cada sessão
@@ -654,6 +687,7 @@ function state() {
     port: PORT,
     code: access.code,
     allowIncoming: settings.allowIncoming,
+    showBanner: settings.showBanner,
     hasPassword: !!settings.passwordKey,
     session: session ? { peer: session.peer, ip: session.ip } : null,
     recent: settings.recent,
@@ -729,9 +763,11 @@ function openViewer(params) {
   return win;
 }
 
+let bannerHidden = false; // a pessoa fechou a faixa nesta sessão
 function showBanner() {
   step('aviso no topo');
   hideBanner();
+  if (!session || !settings.showBanner || bannerHidden) return;
   const wa = screen.getPrimaryDisplay().workArea;
   const w = 420, h = 46;
   bannerWin = new BrowserWindow({
@@ -811,6 +847,15 @@ function registerIpc() {
   ipcMain.handle('hmd:get-peers', () => peerList());
   ipcMain.handle('hmd:new-code', () => { newCode(); return state(); });
   ipcMain.handle('hmd:set-allow', (_e, v) => { setAllow(v); return state(); });
+  ipcMain.handle('hmd:set-banner', (_e, v) => {
+    settings.showBanner = !!v;
+    saveSettings();
+    if (v) { bannerHidden = false; showBanner(); } else hideBanner();
+    pushState();
+    return state();
+  });
+  // o "x" da faixa: some só até a sessão acabar (a bandeja continua mostrando quem controla)
+  ipcMain.on('hmd:banner-hide', () => { bannerHidden = true; hideBanner(); });
   ipcMain.handle('hmd:set-name', (_e, name) => {
     settings.name = String(name || '').trim().slice(0, 40) || undefined;
     saveSettings(); pushState(); return state();
@@ -908,9 +953,17 @@ function registerIpc() {
       }, 15_000);
     }
   });
-  ipcMain.on('hmd:host-captured', (_e, info) => onCaptured(info || {}));
+  ipcMain.on('hmd:host-captured', (_e, info) => { linuxPending = null; onCaptured(info || {}); });
+  ipcMain.on('hmd:host-extra-error', () => linuxCaptureFailed());
   ipcMain.on('hmd:host-error', (_e, msg) => {
     console.error('[servidor] captura:', msg);
+    // Linux: a tela guardada não abriu mais (o sistema esqueceu a permissão): pergunta de novo, uma vez
+    if (IS_LINUX && linuxPending?.reused && session?.current) {
+      linuxCaptureFailed();
+      console.log('[servidor] a tela guardada não abriu: pedindo para escolher de novo');
+      return startCapture(session.current, true);
+    }
+    linuxCaptureFailed();
     session?.send({ type: 'error', reason: 'capture', detail: String(msg) });
     endSession();
   });
@@ -959,7 +1012,10 @@ app.whenReady().then(() => {
     setTimeout(async () => {
       const dir = env('HMD_SNAPSHOT');
       fs.mkdirSync(dir, { recursive: true });
+      console.log('[snapshot] faixa no topo antes do JS:', bannerWin && !bannerWin.isDestroyed() ? 'visível' : 'escondida');
+      if (bannerWin && !bannerWin.isDestroyed()) fs.writeFileSync(path.join(dir, 'banner.png'), (await bannerWin.webContents.capturePage()).toPNG());
       if (mainWin && env('HMD_SNAPSHOT_JS')) { await mainWin.webContents.executeJavaScript(env('HMD_SNAPSHOT_JS'), true); await new Promise((r) => setTimeout(r, 2500)); }
+      console.log('[snapshot] faixa no topo depois do JS:', bannerWin && !bannerWin.isDestroyed() ? 'visível' : 'escondida');
       if (mainWin) fs.writeFileSync(path.join(dir, 'main.png'), (await mainWin.webContents.capturePage()).toPNG());
       // HMD_VIEWER_JS: roda JS nas janelas do viewer antes do print (ex.: "toggleSpread()")
       if (env('HMD_VIEWER_JS')) {

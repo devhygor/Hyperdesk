@@ -191,6 +191,7 @@ async function setExtra({ slot, sourceId, width, height }) {
       x.track.contentHint = videoSender?.track?.contentHint || 'motion';
     } catch (e) {
       api.send('hmd:log', `tela extra ${slot} falhou:`, e.message);
+      api.send('hmd:host-extra-error');
     }
   }
   try { await x.sender.replaceTrack(x.track); } catch (e) { api.send('hmd:log', 'replaceTrack extra:', e.message); }

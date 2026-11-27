@@ -26,6 +26,7 @@ function renderState(s) {
   if (document.activeElement !== $('#name')) $('#name').value = s.name;
   $('#ips').textContent = s.ips.length ? s.ips.join('  ·  ') : 'sem rede';
   $('#allow').checked = s.allowIncoming;
+  $('#showBanner').checked = s.showBanner !== false;
   $('#codeBox').classList.toggle('hidden', !s.allowIncoming || !!s.session);
   $('#offBox').classList.toggle('hidden', s.allowIncoming);
   $('#code').textContent = s.code ? `${s.code.slice(0, 3)} ${s.code.slice(3)}` : '—';
@@ -102,6 +103,7 @@ function renderRecent() {
 
 // ---- eventos
 $('#allow').onchange = (e) => api.invoke('hmd:set-allow', e.target.checked).then(renderState);
+$('#showBanner').onchange = (e) => api.invoke('hmd:set-banner', e.target.checked).then(renderState);
 $('#newCode').onclick = () => api.invoke('hmd:new-code').then(renderState);
 $('#copyCode').onclick = () => { navigator.clipboard.writeText(st.code); toast('Código copiado.'); };
 $('#kick').onclick = () => api.invoke('hmd:disconnect-session');

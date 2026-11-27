@@ -143,7 +143,9 @@ A **seta local** vem ligada: a seta deste PC aparece por cima da imagem e anda s
 
 O texto copiado num PC vai sozinho para a área de transferência do outro.
 
-Enquanto alguém controla, o PC mostra um aviso fixo no topo com o botão **Desconectar**.
+Enquanto alguém controla, o PC mostra um aviso no topo com o botão **Desconectar**. O **✕** esconde o aviso até a conexão acabar, e a opção **Aviso no topo da tela**, no cartão Este PC, desliga ele de vez (a bandeja continua mostrando quem está controlando).
+
+No Linux com Wayland, o sistema pede para escolher a tela na primeira conexão. Nas próximas, o Hyperdesk reabre a mesma tela sem perguntar, enquanto o app continuar aberto no outro PC. Depois de reiniciar o app ou o PC, ele pergunta mais uma vez.
 
 ## Atualizações
 
